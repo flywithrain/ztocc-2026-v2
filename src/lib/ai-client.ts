@@ -109,13 +109,13 @@ export async function generateRule(
 
   // 不再静默 fallback 到 deepseek，缺配置即明确报错
   if (!apiUrl) {
-    throw new Error("AI 接口地址未配置：请设置 DEEPSEEK_API_URL（例如小米 Mimo 的 /chat/completions 端点）");
+    throw new Error("AI 接口地址未配置：请设置 DEEPSEEK_API_URL（例如 StepFun 的 step_plan 端点）");
   }
   if (!apiKey) {
     throw new Error("DEEPSEEK_API_KEY 环境变量未配置");
   }
   if (!model) {
-    throw new Error("DEEPSEEK_MODEL 环境变量未配置（例如 mimo-v2.5-pro）");
+    throw new Error("DEEPSEEK_MODEL 环境变量未配置（例如 step-3.7-flash）");
   }
 
   const samplePrompt = buildSamplePrompt(rows, fileType, fileName);
@@ -128,10 +128,9 @@ export async function generateRule(
     ],
     temperature: 0.1,
     max_completion_tokens: 4096,
-    thinking: { type: "disabled" },
   };
 
-  // 仅 deepseek 官方 API 需要 response_format，Mimo 等兼容 API 可能不支持
+  // 仅 deepseek 官方 API 需要 response_format，StepFun 等兼容 API 可能不支持
   if (apiUrl.includes("deepseek.com")) {
     body.response_format = { type: "json_object" };
   }
@@ -171,16 +170,15 @@ export async function generateRule(
   }
 
   const data = await response.json();
-  console.log("[Mimo API] full response keys:", Object.keys(data));
-  console.log("[Mimo API] usage:", JSON.stringify(data.usage));
-  console.log("[Mimo API] choices[0]:", JSON.stringify(data.choices?.[0]));
+  console.log("[StepFun API] full response keys:", Object.keys(data));
+  console.log("[StepFun API] usage:", JSON.stringify(data.usage));
+  console.log("[StepFun API] choices[0]:", JSON.stringify(data.choices?.[0]));
 
   const message = data.choices?.[0]?.message;
-  // Mimo 深度思考模式下内容可能在 reasoning_content，用 content 兜底
-  const content = message?.content || message?.reasoning_content;
+  const content = message?.content;
 
   if (!content) {
-    console.error("[Mimo API] 完整响应:", JSON.stringify(data).slice(0, 2000));
+    console.error("[StepFun API] 完整响应:", JSON.stringify(data).slice(0, 2000));
     throw new Error("AI 返回内容为空（请检查模型名、API Key 是否正确）");
   }
 

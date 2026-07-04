@@ -29,7 +29,7 @@ There is no test runner configured. To verify parsing behavior, use the sample f
 
 - `DATABASE_URL` — Neon Postgres connection string (required by db, drizzle.config.ts).
 - `DEEPSEEK_API_KEY` — required for AI rule generation.
-- `DEEPSEEK_API_URL` — defaults to DeepSeek; a Mimo-compatible URL also works (see ai-client.ts branching on `deepseek.com`).
+- `DEEPSEEK_API_URL` — defaults to DeepSeek; a StepFun-compatible URL also works (see ai-client.ts branching on `deepseek.com`).
 - `DEEPSEEK_MODEL` — defaults to `deepseek-chat`.
 
 ## Architecture
@@ -63,7 +63,7 @@ Cross-cutting: **KV extraction** (`kvExtract`) scans label cells (e.g. `收货�
 
 A `ParseRule` is persisted as a JSONB `config` blob in `parse_rules` (only `name`/`description` are real columns — see `src/lib/db-schema.ts`). `getRule`/`getAllRules` spread `config` back over the row.
 
-- **AI generation** (`src/lib/ai-client.ts` via `POST /api/ai/analyze`): sends a sampled prompt (first ~50 rows + last 10) to a DeepSeek/Mimo-compatible chat API and expects a strict JSON `AiRuleResponse`. `extractJson` is defensive — it strips ```` ```json ```` fences and falls back to first-`{`…last-`}`. The system prompt enumerates the allowed `toField` names and mode semantics; keep it in sync with `src/types/index.ts` and the parse engine when changing the schema.
+- **AI generation** (`src/lib/ai-client.ts` via `POST /api/ai/analyze`): sends a sampled prompt (first ~50 rows + last 10) to a DeepSeek/StepFun-compatible chat API and expects a strict JSON `AiRuleResponse`. `extractJson` is defensive — it strips ```` ```json ```` fences and falls back to first-`{`…last-`}`. The system prompt enumerates the allowed `toField` names and mode semantics; keep it in sync with `src/types/index.ts` and the parse engine when changing the schema.
 - **Built-in rules**: `src/lib/seed-rules.ts`, seeded via `npm run db:seed` or `POST /api/rules/seed`.
 
 ### Database
