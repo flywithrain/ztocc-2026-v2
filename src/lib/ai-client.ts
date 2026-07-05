@@ -115,7 +115,7 @@ export async function generateRule(
     throw new Error("DEEPSEEK_API_KEY 环境变量未配置");
   }
   if (!model) {
-    throw new Error("DEEPSEEK_MODEL 环境变量未配置（例如 step-3.7-flash）");
+    throw new Error("DEEPSEEK_MODEL 环境变量未配置（例如 step-router-v1）");
   }
 
   const samplePrompt = buildSamplePrompt(rows, fileType, fileName);
@@ -127,7 +127,7 @@ export async function generateRule(
       { role: "user", content: samplePrompt },
     ],
     temperature: 0.1,
-    max_completion_tokens: 4096,
+    max_tokens: 16384,
   };
 
   // 仅 deepseek 官方 API 需要 response_format，StepFun 等兼容 API 可能不支持
