@@ -107,6 +107,15 @@ export async function generateRule(
   const apiKey = (process.env.DEEPSEEK_API_KEY || "").trim().replace(/^["']|["']$/g, "");
   const model = (process.env.DEEPSEEK_MODEL || "").trim();
 
+  // [DEBUG-1] 打印 env 加载情况
+  console.log("[AI-DEBUG-1] env loaded:", {
+    apiUrl: apiUrl || "(EMPTY)",
+    apiKeyLen: apiKey.length,
+    apiKeyFirst4: apiKey.slice(0, 4),
+    apiKeyLast4: apiKey.slice(-4),
+    model: model || "(EMPTY)",
+  });
+
   // 不再静默 fallback 到 deepseek，缺配置即明确报错
   if (!apiUrl) {
     throw new Error("AI 接口地址未配置：请设置 DEEPSEEK_API_URL（例如 StepFun 的 step_plan 端点）");
@@ -135,50 +144,80 @@ export async function generateRule(
     body.response_format = { type: "json_object" };
   }
 
-  // 超时控制：60s 无响应则中断，避免请求挂起
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
+  // [DEBUG-2] 打印请求体（不含 content 全文，太长）
+  console.log("[AI-DEBUG-2] request body keys:", Object.keys(body), "| model:", body.model, "| max_tokens:", body.max_tokens);
 
-  let response: Response;
+  const bodyJson = JSON.stringify(body);
+  const fetchStart = Date.now();
+
+  // Next.js 16 Turbopack 可能拦截路由里的 fetch → 改用原生 https 模块绕过
+  console.log("[AI-DEBUG-4] https START →", apiUrl);
+  const { default: https } = await import("node:https");
+
+  let responseData: Record<string, unknown>;
   try {
-    response = await fetch(apiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
+    responseData = await new Promise((resolve, reject) => {
+      const parsedUrl = new URL(apiUrl);
+      const req = https.request(
+        {
+          hostname: parsedUrl.hostname,
+          port: parsedUrl.port || 443,
+          path: parsedUrl.pathname + parsedUrl.search,
+          method: "POST",
+          timeout: 60_000,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": String(Buffer.byteLength(bodyJson)),
+            Authorization: `Bearer ${apiKey}`,
+          },
+        },
+        (res) => {
+          console.log("[AI-DEBUG-5] https response in", (Date.now() - fetchStart), "ms | status:", res.statusCode);
+          let data = "";
+          res.on("data", (chunk) => (data += chunk));
+          res.on("end", () => {
+            if (res.statusCode !== 200) {
+              console.error("AI API error:", data, "| url:", apiUrl, "| model:", model, "| keyLen:", apiKey.length);
+              if (res.statusCode === 401) {
+                reject(new Error("AI 鉴权失败(401)：请确认 DEEPSEEK_API_KEY 正确无误"));
+                return;
+              }
+              reject(new Error(`AI API 调用失败: ${res.statusCode}`));
+              return;
+            }
+            try {
+              resolve(JSON.parse(data));
+            } catch {
+              reject(new Error("AI 返回非 JSON 格式数据"));
+            }
+          });
+        }
+      );
+      req.on("timeout", () => {
+        console.log("[AI-DEBUG-3] ⚠️ 60s timeout fired, destroying request");
+        req.destroy();
+        reject(new Error("AI 分析超时（60s）：请稍后重试或检查 DEEPSEEK_API_URL 端点是否可用"));
+      });
+      req.on("error", (e) => {
+        console.log("[AI-DEBUG-ERR] https error after", (Date.now() - fetchStart), "ms:", e.name, e.message.slice(0, 200));
+        reject(e);
+      });
+      req.write(bodyJson);
+      req.end();
     });
   } catch (e) {
-    if (e instanceof Error && e.name === "AbortError") {
-      throw new Error("AI 分析超时（60s）：请稍后重试或检查 DEEPSEEK_API_URL 端点是否可用");
-    }
     throw e;
-  } finally {
-    clearTimeout(timeout);
   }
 
-  if (!response.ok) {
-    const errText = await response.text();
-    // 诊断信息：打印 url/model/key 长度与尾部（不泄露完整 key），便于定位配置问题
-    console.error("AI API error:", errText, "| url:", apiUrl, "| model:", model, "| keyLen:", apiKey.length, "| keyTail:", apiKey.slice(-4));
-    if (response.status === 401) {
-      throw new Error("AI 鉴权失败(401)：请确认 DEEPSEEK_API_KEY 正确无误、与 DEEPSEEK_API_URL 属于同一服务商，且在 Vercel 修改环境变量后已重新部署(Redeploy)");
-    }
-    throw new Error(`AI API 调用失败: ${response.status}`);
-  }
+  console.log("[StepFun API] full response keys:", Object.keys(responseData));
+  console.log("[StepFun API] usage:", JSON.stringify(responseData.usage));
+  console.log("[StepFun API] choices[0]:", JSON.stringify(responseData.choices?.[0]));
 
-  const data = await response.json();
-  console.log("[StepFun API] full response keys:", Object.keys(data));
-  console.log("[StepFun API] usage:", JSON.stringify(data.usage));
-  console.log("[StepFun API] choices[0]:", JSON.stringify(data.choices?.[0]));
-
-  const message = data.choices?.[0]?.message;
+  const message = responseData.choices?.[0]?.message;
   const content = message?.content;
 
   if (!content) {
-    console.error("[StepFun API] 完整响应:", JSON.stringify(data).slice(0, 2000));
+    console.error("[StepFun API] 完整响应:", JSON.stringify(responseData).slice(0, 2000));
     throw new Error("AI 返回内容为空（请检查模型名、API Key 是否正确）");
   }
 
