@@ -28,6 +28,12 @@ export async function GET(req: NextRequest) {
     return wrapV2Error(requestId, "BAD_REQUEST", 400, "需提供 shipmentId 或 externalCode");
   }
 
+  // 如果传了 shipmentId 但不是 UUID 格式，拒绝（避免 PostgreSQL UUID 类型报错）
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (shipmentId && !UUID_RE.test(shipmentId)) {
+    return wrapV2Error(requestId, "BAD_REQUEST", 400, `shipmentId 需为 UUID 格式，收到 "${shipmentId}"。若为外部编码请使用 externalCode 参数`);
+  }
+
   if (!verifyV2ApiKey(req)) {
     console.warn(`[v2-api][401] ${requestId} lookup missing/bad api key`);
     return unauthorizedResponse(requestId);
