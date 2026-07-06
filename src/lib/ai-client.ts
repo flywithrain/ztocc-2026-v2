@@ -154,7 +154,9 @@ export async function generateRule(
   console.log("[AI-DEBUG-4] https START →", apiUrl);
   const { default: https } = await import("node:https");
 
-  let responseData: Record<string, unknown>;
+  // Record<string,unknown> 不允许方括号索引；API 响应结构未知，用 any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let responseData: any;
   try {
     responseData = await new Promise((resolve, reject) => {
       const parsedUrl = new URL(apiUrl);
