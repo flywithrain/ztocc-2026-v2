@@ -10,7 +10,7 @@ import { readFile } from "@/lib/file-reader";
 import { parseFile } from "@/lib/parse-engine";
 import { validateOrders, checkExternalCodeDuplicates, checkReceiverConsistency } from "@/lib/validators";
 import { getAllRules, getExistingExternalCodes } from "@/lib/server-actions";
-import type { ParsedFile, ParseRule, OrderRow, ParseProgress } from "@/types";
+import type { ParsedFile, ParseRule, ParseProgress } from "@/types";
 import { Sparkles, FileText, ArrowRight, Database } from "lucide-react";
 
 export default function HomePage() {
@@ -86,6 +86,7 @@ export default function HomePage() {
         errors: allErrors,
         fileName: parsedFile.fileName,
         ruleName: rule.name,
+        ruleId: rule.id,
         parseDuration: Math.round(duration),
       })
     );

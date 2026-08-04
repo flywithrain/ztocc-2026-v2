@@ -10,6 +10,10 @@
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:seed": "npx tsx scripts/seed.ts",
+    "db:seed-load": "npx tsx scripts/seed-data.ts",
+    "load:test": "npx tsx scripts/load-test.ts",
+    "test:async-import": "npx tsx --test src/lib/__tests__/import-core.test.ts",
+    "test:async-import:integration": "npx tsx scripts/integration-test-async-import.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {

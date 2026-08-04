@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Upload, Settings, ListOrdered, Sparkles } from "lucide-react";
+import { Upload, Settings, ListOrdered, Sparkles, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/", label: "导入下单", icon: Upload },
   { href: "/rules", label: "规则管理", icon: Settings },
   { href: "/orders", label: "运单列表", icon: ListOrdered },
+  { href: "/import-monitor", label: "导入监控", icon: Activity },
 ];
 
 export function NavBar() {

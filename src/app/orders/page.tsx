@@ -40,7 +40,8 @@ export default function OrdersPage() {
   }, [page, search, receiverName, startDate, endDate]);
 
   useEffect(() => {
-    loadShipments();
+    const timer = window.setTimeout(() => void loadShipments(), 0);
+    return () => window.clearTimeout(timer);
   }, [loadShipments]);
 
   const handleSearch = useCallback(() => {

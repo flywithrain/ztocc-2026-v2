@@ -11,7 +11,7 @@ import { useToast } from "@/components/shared/toast";
 import { ProgressBar } from "@/components/shared/progress-bar";
 import { EmptyState } from "@/components/shared/empty-state";
 import { validateOrders, checkExternalCodeDuplicates, checkReceiverConsistency } from "@/lib/validators";
-import { submitOrders, getExistingExternalCodes } from "@/lib/server-actions";
+import { getExistingExternalCodes } from "@/lib/server-actions";
 import { generateId } from "@/lib/utils";
 import * as XLSX from "xlsx";
 import type { OrderRow, ValidationError, SubmitResult } from "@/types";
@@ -183,43 +183,34 @@ export default function PreviewPage() {
     const de = checkExternalCodeDuplicates(rows, existingCodes);
     const ce = checkReceiverConsistency(rows);
     if (ve.length + de.length + ce.length > 0) {
-      showToast(`存在 ${ve.length + de.length + ce.length} 个校验错误，请修正后重试`, "error");
-      return;
+      showToast(`将由异步 Worker 记录 ${ve.length + de.length + ce.length} 个行级错误，成功行仍会继续入库`, "info");
     }
 
     setSubmitting(true);
     setSubmitResult(null);
-    const batchId = generateId();
-    const payload = rows.map((r) => ({
-      externalCode: r.externalCode, storeName: r.storeName,
-      receiverName: r.receiverName, receiverPhone: r.receiverPhone, receiverAddress: r.receiverAddress,
-      skuCode: r.skuCode, skuName: r.skuName, skuQuantity: Number(r.skuQuantity),
-      skuSpec: r.skuSpec, remark: r.remark,
-    }));
-
-    const CHUNK = 500;
-    let success = 0, failed = 0;
-    const allErrors: { rowIndex: number; message: string }[] = [];
-    setSubmitProgress({ current: 0, total: payload.length, percent: 0 });
-
+    setSubmitProgress({ current: 0, total: rows.length, percent: 0 });
     try {
-      for (let i = 0; i < payload.length; i += CHUNK) {
-        const part = payload.slice(i, i + CHUNK);
-        const res = await submitOrders(part, batchId);
-        success += res.success;
-        failed += res.failed;
-        allErrors.push(...res.errors.map((e) => ({ rowIndex: i + e.rowIndex, message: e.message })));
-        const done = Math.min(i + CHUNK, payload.length);
-        setSubmitProgress({ current: done, total: payload.length, percent: Math.round((done / payload.length) * 100) });
+      const stored = sessionStorage.getItem("previewData");
+      const preview = stored ? JSON.parse(stored) as { ruleId?: string } : {};
+      if (!preview.ruleId) {
+        showToast("当前预览缺少规则 ID，请返回首页重新选择规则", "error");
+        return;
       }
-      setSubmitResult({ success, failed, batchId, errors: allErrors });
-      showToast(`提交完成：成功 ${success} 条，失败 ${failed} 条`, failed > 0 ? "error" : "success");
+      const response = await fetch("/api/import-tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ file_name: fileName, parse_rule_id: preview.ruleId, rows }),
+      });
+      const result = await response.json() as { task_id?: string; trace_id?: string; error?: string; upload_response_ms?: number };
+      if (!response.ok || !result.task_id) throw new Error(result.error || "异步任务创建失败");
+      showToast(`任务已创建，接口耗时 ${result.upload_response_ms ?? "-"}ms`, "success");
+      router.push(`/import-tasks/${result.task_id}`);
     } catch (err) {
-      showToast(`提交失败：${err instanceof Error ? err.message : "未知错误"}`, "error");
+      showToast(`任务创建失败：${err instanceof Error ? err.message : "未知错误"}`, "error");
     } finally {
       setSubmitting(false);
     }
-  }, [rows, existingCodes, showToast]);
+  }, [rows, existingCodes, showToast, fileName, router]);
 
   const errorRowSet = useMemo(() => new Set(errors.map((e) => e.rowIndex)), [errors]);
   const totalErrorRows = errorRowSet.size;
@@ -271,7 +262,7 @@ export default function PreviewPage() {
           {!isTestParse && (
             <button
               onClick={handleSubmit}
-              disabled={submitting || totalErrorRows > 0}
+              disabled={submitting}
               className="btn-primary gap-1.5 text-sm"
             >
               {submitting ? (<><Loader2 className="h-4 w-4 animate-spin" />提交中...</>) : (<><Upload className="h-4 w-4" />提交下单</>)}

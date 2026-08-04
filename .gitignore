@@ -13,8 +13,8 @@
 # testing
 /coverage
 
-# next.js
-/.next/
+# next.js（包括本地验收使用的 .next-test、.next-final* 等独立构建目录）
+/.next*/
 /out/
 
 # production
@@ -39,4 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Office 临时锁文件
 /**/~$*.xlsx
+
+# 压测运行输出与旧版数据默认不提交，仅保留最终修正版 Excel
+/test-data/*
+!/test-data/10000-orders-fixed.xlsx
+
+# 中间页面截图；最终验收截图保留提交
+/monitor-page.png
+/task-page.png

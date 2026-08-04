@@ -22,7 +22,8 @@ export default function RulesPage() {
   }, []);
 
   useEffect(() => {
-    loadRules();
+    const timer = window.setTimeout(() => void loadRules(), 0);
+    return () => window.clearTimeout(timer);
   }, [loadRules]);
 
   const handleDelete = useCallback(

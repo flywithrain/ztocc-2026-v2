@@ -44,6 +44,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.eyebrow {
+  color: #0b6e6e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
 /* ====== 卡片组件基础样式 ====== */
 .card {
   background: var(--color-bg-card);

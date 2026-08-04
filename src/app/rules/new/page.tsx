@@ -101,16 +101,18 @@ export default function NewRulePage() {
 
   // 从首页上传跳转携带的文件数据（60秒内有效）
   useEffect(() => {
-    const stored = sessionStorage.getItem("newRuleFile");
-    if (!stored) return;
-    const data = JSON.parse(stored);
-    sessionStorage.removeItem("newRuleFile");
-    if (!data._timestamp || Date.now() - data._timestamp > 60_000) return;
-
-    setFileName(data.fileName);
-    setFileRows(data.rows || []);
-    setRule((prev) => ({ ...prev, fileType: data.fileType || "excel", name: `解析规则 - ${data.fileName}` }));
-    setStep("ai");
+    const timer = window.setTimeout(() => {
+      const stored = sessionStorage.getItem("newRuleFile");
+      if (!stored) return;
+      const data = JSON.parse(stored);
+      sessionStorage.removeItem("newRuleFile");
+      if (!data._timestamp || Date.now() - data._timestamp > 60_000) return;
+      setFileName(data.fileName);
+      setFileRows(data.rows || []);
+      setRule((prev) => ({ ...prev, fileType: data.fileType || "excel", name: `解析规则 - ${data.fileName}` }));
+      setStep("ai");
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const handleAiGenerate = useCallback(async () => {
