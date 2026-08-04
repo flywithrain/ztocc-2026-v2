@@ -182,6 +182,9 @@ export async function createImportTask(input: { fileName: string; parseRuleId: s
 
 export async function dispatchOutbox(taskId?: string) {
   const endpoint = process.env.IMPORT_QUEUE_WEBHOOK_URL;
+  if (endpoint && !process.env.IMPORT_QUEUE_WEBHOOK_TOKEN) {
+    throw new Error("配置 IMPORT_QUEUE_WEBHOOK_URL 时必须同时配置 IMPORT_QUEUE_WEBHOOK_TOKEN");
+  }
   if (!endpoint) {
     const events = await sql`
       with claimable as (
@@ -440,7 +443,22 @@ export async function processPendingBatches(taskId: string) {
   }
 }
 
-async function finalizeTask(taskId: string) {
+export async function processImportEvent(event: ImportEventEnvelope) {
+  const payload = event.payload as { task_id?: unknown; unit_id?: unknown };
+  if (event.event_type !== "ImportBatchCreated" || typeof payload.task_id !== "string" || typeof payload.unit_id !== "string") {
+    throw new Error("仅支持包含 task_id 和 unit_id 的 ImportBatchCreated 事件");
+  }
+
+  try {
+    const result = await processImportBatch(payload.task_id, payload.unit_id);
+    await finalizeTask(payload.task_id);
+    return result;
+  } finally {
+    taskContextCache.delete(payload.task_id);
+  }
+}
+
+export async function finalizeTask(taskId: string) {
   await sql`
     with totals as (
       select task_id, count(*) filter (where status = 'completed')::int completed_batches,
@@ -476,6 +494,38 @@ async function finalizeTask(taskId: string) {
 export async function recoverStalledBatches() {
   const cutoff = new Date(Date.now() - 5 * 60 * 1000);
   return db.update(importTaskBatches).set({ status: "failed", lastError: "Worker 超时，等待重试" }).where(and(eq(importTaskBatches.status, "processing"), lte(importTaskBatches.lockedAt, cutoff))).returning({ id: importTaskBatches.id });
+}
+
+export async function processQueuedBatches(limit = WORKER_CONCURRENCY) {
+  await recoverStalledBatches();
+  await dispatchOutbox();
+  const safeLimit = Math.min(20, Math.max(1, Math.trunc(limit)));
+  const queued = await sql`
+    select task_id, unit_id
+    from import_task_batches
+    where status in ('pending', 'failed')
+    order by created_at, batch_index
+    limit ${safeLimit}
+  ` as unknown as { task_id: string; unit_id: string }[];
+
+  const results = await Promise.all(queued.map(async (batch) => {
+    try {
+      const result = await processImportBatch(batch.task_id, batch.unit_id);
+      return { task_id: batch.task_id, unit_id: batch.unit_id, result };
+    } catch (error) {
+      return {
+        task_id: batch.task_id,
+        unit_id: batch.unit_id,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }));
+
+  for (const taskId of new Set(queued.map((batch) => batch.task_id))) {
+    await finalizeTask(taskId);
+    taskContextCache.delete(taskId);
+  }
+  return results;
 }
 
 export async function getImportTask(taskId: string): Promise<ImportTaskSummary | null> {

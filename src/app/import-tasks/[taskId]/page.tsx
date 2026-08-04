@@ -36,7 +36,6 @@ export default function ImportTaskPage({ params }: { params: Promise<{ taskId: s
   const [errorPage, setErrorPage] = useState(1);
   const [errorTotal, setErrorTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [workerRunning, setWorkerRunning] = useState(false);
 
   const loadTask = useCallback(async (id: string) => {
     const response = await fetch(`/api/import-tasks/${id}`, { cache: "no-store" });
@@ -55,12 +54,7 @@ export default function ImportTaskPage({ params }: { params: Promise<{ taskId: s
     setErrors(data.items); setErrorTotal(data.total);
   }, []);
 
-  const runWorker = useCallback(async (id: string) => {
-    setWorkerRunning(true);
-    try { await fetch(`/api/import-tasks/${id}/process`, { method: "POST" }); } finally { setWorkerRunning(false); }
-  }, []);
-
-  useEffect(() => { params.then(({ taskId: id }) => { setTaskId(id); void loadTask(id); void loadErrors(id, 1, "", ""); void runWorker(id); }); }, [params, loadTask, loadErrors, runWorker]);
+  useEffect(() => { params.then(({ taskId: id }) => { setTaskId(id); void loadTask(id); void loadErrors(id, 1, "", ""); }); }, [params, loadTask, loadErrors]);
   useEffect(() => {
     if (!taskId || !task || ["completed", "partial_success", "failed"].includes(task.status)) return;
     const timer = window.setInterval(() => { void loadTask(taskId); void loadErrors(taskId, errorPage, errorCode, errorBatch); }, 2000);
@@ -83,7 +77,7 @@ export default function ImportTaskPage({ params }: { params: Promise<{ taskId: s
     <section className="card mb-5 overflow-hidden border-0 bg-[#102e3a] text-white shadow-[0_14px_40px_rgba(16,46,58,.18)]">
       <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs uppercase tracking-[0.2em] text-[#8ec7c5]">Asynchronous Import / Live</p><p className="mt-2 text-4xl font-semibold tracking-tight">{percent}<span className="ml-1 text-xl text-[#8ec7c5]">%</span></p><p className="mt-1 text-sm text-[#b6cfce]">{task.processed_rows.toLocaleString()} / {task.total_rows.toLocaleString()} 行已处理</p></div><div className="text-right text-sm text-[#b6cfce]"><p>当前吞吐 <strong className="text-white">{task.throughput.toLocaleString()} 行/分钟</strong></p><p>预计剩余 {task.eta_seconds == null ? "—" : `${task.eta_seconds} 秒`}</p><p>批次 {task.completed_batches} / {task.total_batches}</p></div></div>
       <div className="mt-6 h-2 overflow-hidden rounded-full bg-white/15"><div className="h-full rounded-full bg-[#70e1cf] transition-all duration-700" style={{ width: `${percent}%` }} /></div>
-      <div className="mt-4 flex items-center justify-between text-xs text-[#8fb4b4]"><span>{workerRunning ? "Worker 正在消费处理单元..." : "状态每 2 秒刷新"}</span><span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-[#70e1cf]" />trace {task.trace_id}</span></div>
+      <div className="mt-4 flex items-center justify-between text-xs text-[#8fb4b4]"><span>后台 Worker 自动消费，状态每 2 秒刷新</span><span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-[#70e1cf]" />trace {task.trace_id}</span></div>
     </section>
 
     <div className="mb-5 grid gap-4 sm:grid-cols-4"><Metric label="成功入库" value={task.success_rows} tone="green" /><Metric label="失败行" value={task.failed_rows} tone="red" /><Metric label="批量单元" value={task.total_batches} tone="teal" /><Metric label="失败率" value={`${Math.round((task.failed_rows / Math.max(task.total_rows, 1)) * 10000) / 100}%`} tone="orange" /></div>

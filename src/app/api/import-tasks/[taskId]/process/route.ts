@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { processPendingBatches, recoverStalledBatches } from "@/lib/import-service";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 export async function POST(request: Request, context: { params: Promise<{ taskId: string }> }) {
   const { taskId } = await context.params;
+  const expectedToken = process.env.IMPORT_WORKER_TOKEN;
   const token = request.headers.get("x-worker-token");
-  if (process.env.IMPORT_WORKER_TOKEN && token !== process.env.IMPORT_WORKER_TOKEN) {
+  if (!expectedToken || token !== expectedToken) {
     return NextResponse.json({ error: "无权触发 Worker" }, { status: 401 });
   }
   try {

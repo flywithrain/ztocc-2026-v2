@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { shipments, orders } from "@/lib/db-schema";
+import { shipments } from "@/lib/db-schema";
 import { eq } from "drizzle-orm";
 import { getShipmentDetail } from "@/lib/server-actions";
 import {

@@ -13,11 +13,14 @@
 
 ```bash
 DATABASE_URL="postgresql://..."
+V2_API_KEY="replace-with-random-token"
+CORS_ALLOWED_ORIGIN="https://your-v3-app.vercel.app"
 IMPORT_BATCH_SIZE="1000"
 IMPORT_WORKER_CONCURRENCY="4"
 SKU_VALIDATION_TIMEOUT_MS="3000"
-IMPORT_WORKER_TOKEN="replace-with-random-token"
-# 生产可选：QStash/Inngest/独立 Worker webhook
+IMPORT_WORKER_TOKEN="replace-with-different-random-token"
+CRON_SECRET="replace-with-another-random-token"
+# 生产可选：QStash/Inngest/独立 Worker webhook（URL 与 Token 必须同时配置）
 IMPORT_QUEUE_WEBHOOK_URL=""
 IMPORT_QUEUE_WEBHOOK_TOKEN=""
 ```
@@ -72,7 +75,7 @@ RUN_NEON_INTEGRATION_TEST=true npm run test:async-import:integration
 集成测试会使用唯一业务编码创建 2 行临时任务，并在断言完成后按精确 `task_id` 清理。
 
 ## 部署与 Worker
-Vercel 部署 Web/API；`vercel.json` 使用默认 Next.js 构建。演示环境可由任务详情页触发 `/process`。生产不应依赖浏览器触发：配置 QStash/Inngest webhook，或在 Railway/Render/Fly.io 部署常驻 Dispatcher/Worker。数据库表通过 `npm run db:push` 建立。
+Vercel 部署 Web/API；创建任务后由 Next.js `after()` 在响应返回后自动消费，不再依赖浏览器打开任务页。`/api/internal/import-worker?limit=4` 是受 `IMPORT_WORKER_TOKEN` 或 `CRON_SECRET` 保护的恢复入口。真实生产推荐配置 QStash/Inngest webhook，或在 Railway/Render/Fly.io 部署常驻 Dispatcher/Worker。部署前使用 `npm run db:check` 和 `npm run db:migrate`，不要把 `db:push` 放进 Vercel 构建。完整环境变量、请求体限制、上线验收和回滚步骤见 [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)。
 
 ## 故障模拟
 - SKU 超时：设置 `SKU_VALIDATION_TIMEOUT_MS=500` 并在高延迟环境运行，或在测试环境注入 SKU 查询超时；页面应显示降级风险，Trace metadata 记录未校验的行范围

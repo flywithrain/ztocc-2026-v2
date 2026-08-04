@@ -1,4 +1,4 @@
-import type { ParseRuleDraft, AiRuleResponse, RawRow } from "@/types";
+import type { AiRuleResponse, RawRow } from "@/types";
 
 const SYSTEM_PROMPT = `你是一个物流发货单解析专家。你需要分析文件结构并生成解析规则JSON。
 
@@ -107,15 +107,6 @@ export async function generateRule(
   const apiKey = (process.env.DEEPSEEK_API_KEY || "").trim().replace(/^["']|["']$/g, "");
   const model = (process.env.DEEPSEEK_MODEL || "").trim();
 
-  // [DEBUG-1] 打印 env 加载情况
-  console.log("[AI-DEBUG-1] env loaded:", {
-    apiUrl: apiUrl || "(EMPTY)",
-    apiKeyLen: apiKey.length,
-    apiKeyFirst4: apiKey.slice(0, 4),
-    apiKeyLast4: apiKey.slice(-4),
-    model: model || "(EMPTY)",
-  });
-
   // 不再静默 fallback 到 deepseek，缺配置即明确报错
   if (!apiUrl) {
     throw new Error("AI 接口地址未配置：请设置 DEEPSEEK_API_URL（例如 StepFun 的 step_plan 端点）");
@@ -144,14 +135,10 @@ export async function generateRule(
     body.response_format = { type: "json_object" };
   }
 
-  // [DEBUG-2] 打印请求体（不含 content 全文，太长）
-  console.log("[AI-DEBUG-2] request body keys:", Object.keys(body), "| model:", body.model, "| max_tokens:", body.max_tokens);
-
   const bodyJson = JSON.stringify(body);
   const fetchStart = Date.now();
 
   // Next.js 16 Turbopack 可能拦截路由里的 fetch → 改用原生 https 模块绕过
-  console.log("[AI-DEBUG-4] https START →", apiUrl);
   const { default: https } = await import("node:https");
 
   // Record<string,unknown> 不允许方括号索引；API 响应结构未知，用 any
@@ -174,12 +161,11 @@ export async function generateRule(
           },
         },
         (res) => {
-          console.log("[AI-DEBUG-5] https response in", (Date.now() - fetchStart), "ms | status:", res.statusCode);
           let data = "";
           res.on("data", (chunk) => (data += chunk));
           res.on("end", () => {
             if (res.statusCode !== 200) {
-              console.error("AI API error:", data, "| url:", apiUrl, "| model:", model, "| keyLen:", apiKey.length);
+              console.error("AI API 调用失败", { status: res.statusCode, durationMs: Date.now() - fetchStart, apiHost: parsedUrl.hostname, model });
               if (res.statusCode === 401) {
                 reject(new Error("AI 鉴权失败(401)：请确认 DEEPSEEK_API_KEY 正确无误"));
                 return;
@@ -196,13 +182,12 @@ export async function generateRule(
         }
       );
       req.on("timeout", () => {
-        console.log("[AI-DEBUG-3] ⚠️ 60s timeout fired, destroying request");
         req.destroy();
         reject(new Error("AI 分析超时（60s）：请稍后重试或检查 DEEPSEEK_API_URL 端点是否可用"));
       });
-      req.on("error", (e) => {
-        console.log("[AI-DEBUG-ERR] https error after", (Date.now() - fetchStart), "ms:", e.name, e.message.slice(0, 200));
-        reject(e);
+      req.on("error", (error) => {
+        console.error("AI HTTPS 请求失败", { durationMs: Date.now() - fetchStart, name: error.name, message: error.message.slice(0, 200) });
+        reject(error);
       });
       req.write(bodyJson);
       req.end();
@@ -211,15 +196,11 @@ export async function generateRule(
     throw e;
   }
 
-  console.log("[StepFun API] full response keys:", Object.keys(responseData));
-  console.log("[StepFun API] usage:", JSON.stringify(responseData.usage));
-  console.log("[StepFun API] choices[0]:", JSON.stringify(responseData.choices?.[0]));
-
   const message = responseData.choices?.[0]?.message;
   const content = message?.content;
 
   if (!content) {
-    console.error("[StepFun API] 完整响应:", JSON.stringify(responseData).slice(0, 2000));
+    console.error("AI 返回内容为空", { responseKeys: Object.keys(responseData), finishReason: responseData.choices?.[0]?.finish_reason });
     throw new Error("AI 返回内容为空（请检查模型名、API Key 是否正确）");
   }
 

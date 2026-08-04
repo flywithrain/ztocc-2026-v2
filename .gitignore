@@ -29,9 +29,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+/scripts/_*.js
 
-# env files (can opt-in for committing if needed)
+# env files（提交无密钥模板，忽略真实配置）
 .env*
+!.env.example
 
 # vercel
 .vercel
