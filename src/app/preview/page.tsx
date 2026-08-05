@@ -12,6 +12,8 @@ import { ProgressBar } from "@/components/shared/progress-bar";
 import { EmptyState } from "@/components/shared/empty-state";
 import { validateOrders, checkExternalCodeDuplicates, checkReceiverConsistency } from "@/lib/validators";
 import { getExistingExternalCodes } from "@/lib/server-actions";
+import { upload } from "@vercel/blob/client";
+import { buildManifestBlobPath } from "@/lib/blob-paths";
 import { generateId } from "@/lib/utils";
 import * as XLSX from "xlsx";
 import type { OrderRow, ValidationError, SubmitResult } from "@/types";
@@ -191,18 +193,44 @@ export default function PreviewPage() {
     setSubmitProgress({ current: 0, total: rows.length, percent: 0 });
     try {
       const stored = sessionStorage.getItem("previewData");
-      const preview = stored ? JSON.parse(stored) as { ruleId?: string } : {};
-      if (!preview.ruleId) {
-        showToast("当前预览缺少规则 ID，请返回首页重新选择规则", "error");
+      const preview = stored ? JSON.parse(stored) as {
+        ruleId?: string;
+        sourceBlob?: { url: string; pathname: string; contentType: string; size: number; fileHash: string };
+      } : {};
+      if (!preview.ruleId || !preview.sourceBlob) {
+        showToast("当前预览缺少规则或原始文件 Blob，请返回首页重新上传", "error");
         return;
       }
+      const manifestBody = JSON.stringify({ schema_version: 1, mode: "replace", deleted_row_indexes: [], upserts: rows });
+      const manifest = await upload(buildManifestBlobPath(), manifestBody, {
+        access: "private",
+        handleUploadUrl: "/api/import-files/upload",
+        contentType: "application/json",
+        multipart: manifestBody.length > 5 * 1024 * 1024,
+        onUploadProgress: ({ percentage }) => {
+          setSubmitProgress({ current: Math.round(rows.length * percentage / 100), total: rows.length, percent: Math.round(percentage * 0.8) });
+        },
+      });
+      setSubmitProgress({ current: rows.length, total: rows.length, percent: 85 });
       const response = await fetch("/api/import-tasks", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ file_name: fileName, parse_rule_id: preview.ruleId, rows }),
+        body: JSON.stringify({
+          file_name: fileName,
+          parse_rule_id: preview.ruleId,
+          source_blob_url: preview.sourceBlob.url,
+          source_blob_pathname: preview.sourceBlob.pathname,
+          edit_manifest_blob_url: manifest.url,
+          edit_manifest_blob_pathname: manifest.pathname,
+          file_hash: preview.sourceBlob.fileHash,
+          file_mime: preview.sourceBlob.contentType,
+          file_size: preview.sourceBlob.size,
+          total_rows_hint: rows.length,
+        }),
       });
       const result = await response.json() as { task_id?: string; trace_id?: string; error?: string; upload_response_ms?: number };
       if (!response.ok || !result.task_id) throw new Error(result.error || "异步任务创建失败");
+      setSubmitProgress({ current: rows.length, total: rows.length, percent: 100 });
       showToast(`任务已创建，接口耗时 ${result.upload_response_ms ?? "-"}ms`, "success");
       router.push(`/import-tasks/${result.task_id}`);
     } catch (err) {

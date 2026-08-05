@@ -1,29 +1,30 @@
-import { NextRequest, NextResponse } from "next/server";
-import { processQueuedBatches } from "@/lib/import-service";
+import { NextResponse } from "next/server";
+import { runImportRecovery } from "@/lib/import-service";
+import { verifyQStashRequest } from "@/lib/qstash-receiver";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 30;
 
-function isAuthorized(request: NextRequest) {
+async function isAuthorized(request: Request, rawBody: string) {
   const workerToken = process.env.IMPORT_WORKER_TOKEN;
-  const cronSecret = process.env.CRON_SECRET;
-  const workerHeader = request.headers.get("x-worker-token");
-  const authorization = request.headers.get("authorization");
-
-  return Boolean(
-    (workerToken && workerHeader === workerToken) ||
-    (cronSecret && authorization === `Bearer ${cronSecret}`)
-  );
+  if (workerToken && request.headers.get("x-worker-token") === workerToken) return true;
+  try {
+    return await verifyQStashRequest(request, rawBody);
+  } catch {
+    return false;
+  }
 }
 
-async function run(request: NextRequest) {
-  if (!isAuthorized(request)) {
-    return NextResponse.json({ error: "无权触发内部 Worker" }, { status: 401 });
+async function run(request: Request) {
+  const rawBody = request.method === "POST" ? await request.text() : "";
+  if (!await isAuthorized(request, rawBody)) {
+    return NextResponse.json({ error: "无权触发导入恢复控制面" }, { status: 401 });
   }
-
-  const limit = Number(request.nextUrl.searchParams.get("limit") || 4);
-  const results = await processQueuedBatches(limit);
-  return NextResponse.json({ processed_batches: results.length, results });
+  try {
+    return NextResponse.json({ control_plane: true, ...(await runImportRecovery()) });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "恢复控制面执行失败" }, { status: 500 });
+  }
 }
 
 export const GET = run;

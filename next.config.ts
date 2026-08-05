@@ -1,8 +1,16 @@
 import type { NextConfig } from "next";
+import { fileURLToPath } from "node:url";
+
+const projectRoot = fileURLToPath(new URL(".", import.meta.url));
 
 const nextConfig: NextConfig = {
   // 本地出现缓存锁时可用 NEXT_DIST_DIR 切换到独立构建目录；Vercel 默认仍使用 .next
   distDir: process.env.NEXT_DIST_DIR || ".next",
+
+  // 固定 V2 为 Turbopack 根目录，避免父目录遗留 lockfile 干扰工作区识别。
+  turbopack: {
+    root: projectRoot,
+  },
 
   // Vercel Serverless 配置
   serverExternalPackages: ["pdfjs-dist"],

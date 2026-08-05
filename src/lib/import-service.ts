@@ -2,18 +2,22 @@ import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { and, asc, eq, inArray, lte, ne } from "drizzle-orm";
 import { db, sql } from "@/lib/db";
+import { assertImportBlobReference, deleteImportBlobs, readPrivateBlobBuffer, readPrivateBlobJson, verifyImportBlob, writeBatchPayload, type ImportEditManifest } from "@/lib/blob-storage";
+import { readFileBuffer } from "@/lib/file-reader";
+import { parseFile } from "@/lib/parse-engine";
+import { isQStashConfigured, publishImportEvent } from "@/lib/qstash-publisher";
 import {
-  eventOutbox,
   importTaskBatches,
   importTasks,
   orders,
+  parseRules,
   shipments,
   skuMaster,
   traceEvents,
 } from "@/lib/db-schema";
 import { checkReceiverConsistency, validateOrders } from "@/lib/validators";
 import type { OrderRow, ValidationError } from "@/types";
-import type { ImportEventEnvelope, ImportTaskPayload, ImportTaskSummary } from "@/lib/import-types";
+import type { BlobImportTaskInput, ImportEventEnvelope, ImportTaskPayload, ImportTaskSummary } from "@/lib/import-types";
 
 export const IMPORT_BATCH_SIZE = Math.max(100, Number(process.env.IMPORT_BATCH_SIZE || 1000));
 export const WORKER_CONCURRENCY = Math.max(1, Number(process.env.IMPORT_WORKER_CONCURRENCY || 4));
@@ -51,7 +55,7 @@ type WorkerTaskContext = {
   id: string;
   traceId: string;
   startedAt: Date | null;
-  payload: ImportTaskPayload;
+  payload: ImportTaskPayload | null;
 };
 
 const taskContextCache = new Map<string, Promise<WorkerTaskContext>>();
@@ -65,7 +69,7 @@ function loadWorkerTaskContext(taskId: string) {
     .limit(1)
     .then(([task]) => {
       if (!task) throw new Error("导入任务不存在");
-      return { id: task.id, traceId: task.traceId, startedAt: task.startedAt, payload: decodePayload(task.filePayload) };
+      return { id: task.id, traceId: task.traceId, startedAt: task.startedAt, payload: task.filePayload ? decodePayload(task.filePayload) : null };
     });
   taskContextCache.set(taskId, pending);
   return pending;
@@ -95,6 +99,64 @@ async function trace(taskId: string, traceId: string, eventName: string, status:
   } catch (error) {
     console.error("Trace 写入失败", { taskId, traceId, eventName, error });
   }
+}
+
+export async function createBlobImportTask(input: BlobImportTaskInput) {
+  if (!/^[0-9a-f]{64}$/i.test(input.fileHash)) throw new Error("file_hash 必须是 64 位 SHA-256");
+  assertImportBlobReference(input.sourceBlobUrl, input.sourceBlobPathname, "source");
+  if (input.editManifestBlobPathname || input.editManifestBlobUrl) {
+    if (!input.editManifestBlobPathname || !input.editManifestBlobUrl) throw new Error("编辑清单 Blob URL 与 pathname 必须同时提供");
+    assertImportBlobReference(input.editManifestBlobUrl, input.editManifestBlobPathname, "manifest");
+  }
+  const source = await verifyImportBlob(input.sourceBlobPathname, Math.max(1, Number(process.env.IMPORT_MAX_FILE_SIZE_MB || 50)) * 1024 * 1024);
+  if (source.size !== input.fileSize) throw new Error("原始文件大小与 Blob 元数据不一致");
+  if (input.editManifestBlobPathname) await verifyImportBlob(input.editManifestBlobPathname, 50 * 1024 * 1024);
+
+  const taskId = crypto.randomUUID();
+  const traceId = crypto.randomUUID();
+  const eventId = crypto.randomUUID();
+  const retentionHours = Math.max(1, Number(process.env.IMPORT_BLOB_RETENTION_HOURS || 24));
+  const retainUntil = new Date(Date.now() + retentionHours * 60 * 60 * 1000);
+  const envelope: ImportEventEnvelope = {
+    event_id: eventId,
+    event_type: "ImportFileUploaded",
+    schema_version: 1,
+    aggregate_id: taskId,
+    trace_id: traceId,
+    occurred_at: new Date().toISOString(),
+    payload: { task_id: taskId },
+  };
+
+  await sql`
+    with task_insert as (
+      insert into import_tasks (
+        id, file_name, file_hash, parse_rule_id, status, total_rows, total_batches, trace_id,
+        source_blob_url, source_blob_pathname, edit_manifest_blob_url, edit_manifest_blob_pathname,
+        file_mime, file_size, processing_stage, blob_retain_until
+      ) values (
+        ${taskId}, ${input.fileName}, ${input.fileHash}, ${input.parseRuleId}, 'pending', ${Math.max(0, input.totalRowsHint || 0)}, 0, ${traceId},
+        ${input.sourceBlobUrl}, ${input.sourceBlobPathname}, ${input.editManifestBlobUrl || null}, ${input.editManifestBlobPathname || null},
+        ${input.fileMime || source.contentType}, ${source.size}, 'file_uploaded', ${retainUntil}
+      ) returning id
+    ), outbox_insert as (
+      insert into event_outbox (id, aggregate_id, event_type, schema_version, payload, status, provider, next_retry_at)
+      select ${eventId}, id, 'ImportFileUploaded', 1, ${JSON.stringify(envelope)}::jsonb, 'pending', 'qstash', now()
+      from task_insert returning id
+    )
+    insert into trace_events (id, trace_id, task_id, event_name, event_status, message, metadata)
+    select gen_random_uuid(), ${traceId}, id, 'ImportFileUploaded', 'success', '原始文件已保存到 Private Blob，等待 QStash 投递',
+      ${JSON.stringify({ source_pathname: input.sourceBlobPathname, file_size: source.size, retention_hours: retentionHours })}::jsonb
+    from task_insert where exists (select 1 from outbox_insert)
+  `;
+
+  return {
+    task_id: taskId,
+    trace_id: traceId,
+    status: "pending" as const,
+    total_rows: Math.max(0, input.totalRowsHint || 0),
+    total_batches: 0,
+    duplicate_key: input.fileHash,
+  };
 }
 
 export async function createImportTask(input: { fileName: string; parseRuleId: string; rule: ImportTaskPayload["rule"]; rows: OrderRow[] }) {
@@ -181,56 +243,60 @@ export async function createImportTask(input: { fileName: string; parseRuleId: s
 }
 
 export async function dispatchOutbox(taskId?: string) {
-  const endpoint = process.env.IMPORT_QUEUE_WEBHOOK_URL;
-  if (endpoint && !process.env.IMPORT_QUEUE_WEBHOOK_TOKEN) {
-    throw new Error("配置 IMPORT_QUEUE_WEBHOOK_URL 时必须同时配置 IMPORT_QUEUE_WEBHOOK_TOKEN");
-  }
-  if (!endpoint) {
-    const events = await sql`
-      with claimable as (
-        select id
-        from event_outbox
-        where status in ('pending', 'failed')
-          and next_retry_at <= now()
-          and (${taskId || null}::uuid is null or aggregate_id = ${taskId || null}::uuid)
-        order by created_at
-        limit 100
-        for update skip locked
-      )
-      update event_outbox e
-      set status = 'sent', sent_at = now(), last_error = null
-      from claimable c
-      where e.id = c.id
-      returning e.id, e.aggregate_id, e.payload
-    ` as unknown as { id: string; aggregate_id: string; payload: ImportEventEnvelope }[];
-    if (events.length) {
-      const first = events[0];
-      await trace(first.aggregate_id, String(first.payload.trace_id), "OutboxDispatched", "success", `${events.length} 个事件已进入 PostgreSQL 可靠任务队列`, undefined, {
-        event_count: events.length,
-        event_ids: events.map((event) => event.id),
-      });
-    }
-    return events.length;
+  if (!isQStashConfigured()) {
+    if (process.env.NODE_ENV === "production") throw new Error("Production 必须完整配置 QStash");
+    return 0;
   }
 
-  const conditions = [inArray(eventOutbox.status, ["pending", "failed"]), lte(eventOutbox.nextRetryAt, new Date())];
-  if (taskId) conditions.push(eq(eventOutbox.aggregateId, taskId));
-  const events = await db.select().from(eventOutbox).where(and(...conditions)).orderBy(asc(eventOutbox.createdAt)).limit(100);
+  const claimToken = crypto.randomUUID();
+  const events = await sql`
+    with claimable as (
+      select id
+      from event_outbox
+      where status in ('pending', 'failed')
+        and next_retry_at <= now()
+        and (lease_expires_at is null or lease_expires_at < now())
+        and (${taskId || null}::uuid is null or aggregate_id = ${taskId || null}::uuid)
+      order by created_at
+      limit 100
+      for update skip locked
+    )
+    update event_outbox e
+    set status = 'publishing', claimed_at = now(), claim_token = ${claimToken}, lease_expires_at = now() + interval '30 seconds'
+    from claimable c
+    where e.id = c.id
+    returning e.id, e.aggregate_id, e.payload, e.retry_count
+  ` as unknown as Array<{ id: string; aggregate_id: string; payload: ImportEventEnvelope; retry_count: number }>;
 
   for (const event of events) {
     try {
-      const response = await fetch(endpoint!, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${process.env.IMPORT_QUEUE_WEBHOOK_TOKEN || ""}` },
-        body: JSON.stringify(event.payload),
-        signal: AbortSignal.timeout(5000),
+      const published = await publishImportEvent(event.payload);
+      await sql`
+        update event_outbox
+        set status = 'sent', sent_at = now(), last_error = null, provider = 'qstash',
+          provider_message_id = ${published.messageId}, last_provider_response = ${JSON.stringify(published.providerResponse)}::jsonb,
+          claimed_at = null, claim_token = null, lease_expires_at = null
+        where id = ${event.id} and claim_token = ${claimToken}
+      `;
+      await trace(event.aggregate_id, event.payload.trace_id, "QStashPublished", "success", "事件已投递到 Upstash QStash", undefined, {
+        event_id: event.id,
+        event_type: event.payload.event_type,
+        qstash_message_id: published.messageId,
       });
-      if (!response.ok) throw new Error(`Queue webhook ${response.status}`);
-      await db.update(eventOutbox).set({ status: "sent", sentAt: new Date(), lastError: null }).where(eq(eventOutbox.id, event.id));
-      await trace(event.aggregateId, String((event.payload as ImportEventEnvelope).trace_id), "OutboxDispatched", "success", "事件已投递到外部队列", undefined, { event_id: event.id });
     } catch (error) {
-      const retry = event.retryCount + 1;
-      await db.update(eventOutbox).set({ status: "failed", retryCount: retry, lastError: error instanceof Error ? error.message : String(error), nextRetryAt: new Date(Date.now() + Math.min(60000, 1000 * 2 ** retry)) }).where(eq(eventOutbox.id, event.id));
+      const retry = event.retry_count + 1;
+      const message = error instanceof Error ? error.message : String(error);
+      await sql`
+        update event_outbox
+        set status = 'failed', retry_count = ${retry}, last_error = ${message},
+          next_retry_at = now() + make_interval(secs => least(60, power(2, ${retry})::int)),
+          claimed_at = null, claim_token = null, lease_expires_at = null
+        where id = ${event.id} and claim_token = ${claimToken}
+      `;
+      await trace(event.aggregate_id, event.payload.trace_id, "QStashPublishFailed", "failed", message, undefined, {
+        event_id: event.id,
+        retry_count: retry,
+      });
     }
   }
   return events.length;
@@ -292,12 +358,15 @@ function buildSuccessfulRows(rows: OrderRow[], taskId: string, batchIndex: numbe
   return { shipmentRows, orderRows };
 }
 
-export async function processImportBatch(taskId: string, unitId: string) {
+export async function processImportBatch(taskId: string, unitId: string, delivery?: { messageId?: string | null; deliveryAttempt?: number }) {
   const batchStartedAt = new Date();
   const claimed = await sql`
     with claimed as (
       update import_task_batches
-      set status = 'processing', locked_at = now(), retry_count = retry_count + 1, version = version + 1
+      set status = 'processing', locked_at = now(), retry_count = retry_count + 1, version = version + 1,
+        qstash_message_id = coalesce(${delivery?.messageId || null}, qstash_message_id),
+        delivery_attempt = greatest(delivery_attempt, ${delivery?.deliveryAttempt || 0}),
+        last_delivery_at = case when ${delivery?.deliveryAttempt || 0} > 0 then now() else last_delivery_at end
       where task_id = ${taskId} and unit_id = ${unitId} and status in ('pending', 'failed')
       returning id, batch_index, start_row, end_row
     ), task_started as (
@@ -319,7 +388,14 @@ export async function processImportBatch(taskId: string, unitId: string) {
 
   const batch = claimed[0];
   const task = await loadWorkerTaskContext(taskId);
-  const rows = task.payload.rows.slice(batch.start_row, batch.end_row);
+  const batchRow = await db.select({ payloadBlobPathname: importTaskBatches.payloadBlobPathname })
+    .from(importTaskBatches)
+    .where(eq(importTaskBatches.id, batch.id))
+    .limit(1);
+  const rows = batchRow[0]?.payloadBlobPathname
+    ? (await readPrivateBlobJson<{ schema_version: 1; rows: OrderRow[] }>(batchRow[0].payloadBlobPathname)).rows
+    : task.payload?.rows.slice(batch.start_row, batch.end_row);
+  if (!rows) throw new Error("批次既没有 Blob payload，也没有可兼容的旧任务载荷");
 
   try {
     const validateStarted = nowMs();
@@ -443,14 +519,150 @@ export async function processPendingBatches(taskId: string) {
   }
 }
 
-export async function processImportEvent(event: ImportEventEnvelope) {
+function applyEditManifest(rows: OrderRow[], manifest: ImportEditManifest | null) {
+  if (!manifest) return rows;
+  if (manifest.schema_version !== 1 || !Array.isArray(manifest.deleted_row_indexes) || !Array.isArray(manifest.upserts)) {
+    throw new Error("编辑清单格式无效");
+  }
+  if (manifest.mode === "replace") return manifest.upserts;
+  const deleted = new Set(manifest.deleted_row_indexes);
+  const byRowIndex = new Map(rows.filter((row) => !deleted.has(row.rowIndex)).map((row) => [row.rowIndex, row]));
+  for (const row of manifest.upserts) byRowIndex.set(row.rowIndex, row);
+  return Array.from(byRowIndex.values()).sort((a, b) => a.rowIndex - b.rowIndex);
+}
+
+export async function processImportFile(taskId: string) {
+  const claimed = await sql`
+    update import_tasks
+    set processing_stage = 'parsing', status = 'processing', started_at = coalesce(started_at, now()),
+      parse_retry_count = parse_retry_count + 1, parse_last_error = null
+    where id = ${taskId} and processing_stage in ('file_uploaded', 'parse_failed')
+    returning id, trace_id, file_name, file_hash, parse_rule_id, source_blob_pathname,
+      edit_manifest_blob_pathname, file_mime
+  ` as unknown as Array<{
+    id: string;
+    trace_id: string;
+    file_name: string;
+    file_hash: string;
+    parse_rule_id: string;
+    source_blob_pathname: string | null;
+    edit_manifest_blob_pathname: string | null;
+    file_mime: string | null;
+  }>;
+  if (!claimed.length) return { idempotent: true, task_id: taskId };
+  const task = claimed[0];
+
+  try {
+    if (!task.source_blob_pathname) throw new Error("任务缺少原始文件 Blob 引用");
+    const [sourceBuffer, ruleRows, manifest] = await Promise.all([
+      readPrivateBlobBuffer(task.source_blob_pathname),
+      db.select({ config: parseRules.config }).from(parseRules).where(eq(parseRules.id, task.parse_rule_id)).limit(1),
+      task.edit_manifest_blob_pathname
+        ? readPrivateBlobJson<ImportEditManifest>(task.edit_manifest_blob_pathname)
+        : Promise.resolve(null),
+    ]);
+    if (!ruleRows[0]) throw new Error("解析规则不存在");
+    const actualHash = createHash("sha256").update(sourceBuffer).digest("hex");
+    if (actualHash !== task.file_hash) throw new Error("原始文件 SHA-256 与任务声明不一致");
+
+    const rule = { id: task.parse_rule_id, ...(ruleRows[0].config as Record<string, unknown>) } as ImportTaskPayload["rule"];
+    const parsed = await readFileBuffer(sourceBuffer, task.file_name, task.file_mime || undefined);
+    const rows = applyEditManifest(parseFile(parsed, rule), manifest);
+    if (rows.length === 0) throw new Error("解析结果为空，无法创建处理批次");
+    if (rows.length > 50000) throw new Error("单个任务最多支持 50,000 行");
+
+    const totalBatches = Math.ceil(rows.length / IMPORT_BATCH_SIZE);
+    const batchArtifacts = await Promise.all(Array.from({ length: totalBatches }, async (_, batchIndex) => {
+      const unitId = `batch_${String(batchIndex + 1).padStart(4, "0")}`;
+      const startRow = batchIndex * IMPORT_BATCH_SIZE;
+      const endRow = Math.min((batchIndex + 1) * IMPORT_BATCH_SIZE, rows.length);
+      const blob = await writeBatchPayload(taskId, unitId, rows.slice(startRow, endRow));
+      const eventId = crypto.randomUUID();
+      const envelope: ImportEventEnvelope = {
+        event_id: eventId,
+        event_type: "ImportBatchCreated",
+        schema_version: 1,
+        aggregate_id: taskId,
+        trace_id: task.trace_id,
+        occurred_at: new Date().toISOString(),
+        payload: { task_id: taskId, unit_id: unitId, batch_index: batchIndex },
+      };
+      return {
+        id: crypto.randomUUID(), eventId, unitId, batchIndex, startRow, endRow,
+        payloadBlobUrl: blob.url, payloadBlobPathname: blob.pathname, envelope,
+      };
+    }));
+
+    const storedBatches = batchArtifacts.map((batch) => ({
+      id: batch.id, task_id: taskId, unit_id: batch.unitId, batch_index: batch.batchIndex,
+      start_row: batch.startRow, end_row: batch.endRow, status: "pending",
+      payload_blob_url: batch.payloadBlobUrl, payload_blob_pathname: batch.payloadBlobPathname,
+    }));
+    const storedOutbox = batchArtifacts.map((batch) => ({
+      id: batch.eventId, aggregate_id: taskId, event_type: "ImportBatchCreated",
+      schema_version: 1, payload: batch.envelope, status: "pending", provider: "qstash",
+    }));
+
+    await sql`
+      with batch_insert as (
+        insert into import_task_batches (
+          id, task_id, unit_id, batch_index, start_row, end_row, status, payload_blob_url, payload_blob_pathname
+        )
+        select x.id, x.task_id, x.unit_id, x.batch_index, x.start_row, x.end_row, x.status,
+          x.payload_blob_url, x.payload_blob_pathname
+        from jsonb_to_recordset(${JSON.stringify(storedBatches)}::jsonb)
+        as x(id uuid, task_id uuid, unit_id varchar, batch_index int, start_row int, end_row int,
+          status varchar, payload_blob_url text, payload_blob_pathname text)
+        on conflict (task_id, unit_id) do nothing
+        returning id
+      ), outbox_insert as (
+        insert into event_outbox (id, aggregate_id, event_type, schema_version, payload, status, provider, next_retry_at)
+        select x.id, x.aggregate_id, x.event_type, x.schema_version, x.payload, x.status, x.provider, now()
+        from jsonb_to_recordset(${JSON.stringify(storedOutbox)}::jsonb)
+        as x(id uuid, aggregate_id uuid, event_type varchar, schema_version int, payload jsonb, status varchar, provider varchar)
+        on conflict (id) do nothing
+        returning id
+      ), task_update as (
+        update import_tasks set total_rows = ${rows.length}, total_batches = ${totalBatches},
+          processing_stage = 'waiting_batches', parsed_at = now(), parse_last_error = null
+        where id = ${taskId}
+        returning id
+      )
+      insert into trace_events (id, trace_id, task_id, event_name, event_status, message, metadata)
+      select gen_random_uuid(), ${task.trace_id}, id, 'ImportFileParsed', 'success',
+        ${`文件解析完成，已生成 ${totalBatches} 个 Blob 批次`},
+        ${JSON.stringify({ total_rows: rows.length, total_batches: totalBatches, batch_size: IMPORT_BATCH_SIZE })}::jsonb
+      from task_update
+    `;
+    return { idempotent: false, task_id: taskId, total_rows: rows.length, total_batches: totalBatches };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await sql.transaction([
+      sql`update import_tasks set processing_stage = 'parse_failed', status = 'pending', parse_last_error = ${message} where id = ${taskId}`,
+      sql`insert into trace_events (id, trace_id, task_id, event_name, event_status, message) values (gen_random_uuid(), ${task.trace_id}, ${taskId}, 'ImportFileParseFailed', 'failed', ${message})`,
+    ]);
+    throw error;
+  }
+}
+
+export async function processImportEvent(
+  event: ImportEventEnvelope,
+  delivery?: { messageId?: string | null; deliveryAttempt?: number }
+) {
   const payload = event.payload as { task_id?: unknown; unit_id?: unknown };
-  if (event.event_type !== "ImportBatchCreated" || typeof payload.task_id !== "string" || typeof payload.unit_id !== "string") {
-    throw new Error("仅支持包含 task_id 和 unit_id 的 ImportBatchCreated 事件");
+  if (typeof payload.task_id !== "string") throw new Error("导入事件缺少 task_id");
+
+  if (event.event_type === "ImportFileUploaded") {
+    const result = await processImportFile(payload.task_id);
+    await dispatchOutbox(payload.task_id);
+    return result;
+  }
+  if (event.event_type !== "ImportBatchCreated" || typeof payload.unit_id !== "string") {
+    throw new Error("不支持的导入事件类型或缺少 unit_id");
   }
 
   try {
-    const result = await processImportBatch(payload.task_id, payload.unit_id);
+    const result = await processImportBatch(payload.task_id, payload.unit_id, delivery);
     await finalizeTask(payload.task_id);
     return result;
   } finally {
@@ -493,39 +705,146 @@ export async function finalizeTask(taskId: string) {
 
 export async function recoverStalledBatches() {
   const cutoff = new Date(Date.now() - 5 * 60 * 1000);
-  return db.update(importTaskBatches).set({ status: "failed", lastError: "Worker 超时，等待重试" }).where(and(eq(importTaskBatches.status, "processing"), lte(importTaskBatches.lockedAt, cutoff))).returning({ id: importTaskBatches.id });
+  const stalled = await db.update(importTaskBatches)
+    .set({ status: "failed", lastError: "Worker 超时，等待 QStash 重新投递" })
+    .where(and(eq(importTaskBatches.status, "processing"), lte(importTaskBatches.lockedAt, cutoff)))
+    .returning({ taskId: importTaskBatches.taskId, unitId: importTaskBatches.unitId });
+  if (stalled.length) {
+    await sql`
+      update event_outbox o
+      set status = 'failed', next_retry_at = now(), last_error = 'Worker 超时，恢复控制面重新投递',
+        claimed_at = null, claim_token = null, lease_expires_at = null
+      from import_task_batches b
+      where b.task_id = o.aggregate_id
+        and b.status = 'failed'
+        and o.event_type = 'ImportBatchCreated'
+        and o.payload->'payload'->>'unit_id' = b.unit_id
+        and o.aggregate_id = any(${stalled.map((item) => item.taskId)}::uuid[])
+    `;
+  }
+  return stalled;
 }
 
-export async function processQueuedBatches(limit = WORKER_CONCURRENCY) {
-  await recoverStalledBatches();
-  await dispatchOutbox();
-  const safeLimit = Math.min(20, Math.max(1, Math.trunc(limit)));
-  const queued = await sql`
-    select task_id, unit_id
-    from import_task_batches
-    where status in ('pending', 'failed')
-    order by created_at, batch_index
+export async function runImportRecovery() {
+  const stalled = await recoverStalledBatches();
+  const dispatched = await dispatchOutbox();
+  return { recovered_batches: stalled.length, dispatched_events: dispatched };
+}
+
+export async function cleanupExpiredImportBlobs(limit = 25) {
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+  const tasks = await sql`
+    select t.id, t.source_blob_pathname, t.edit_manifest_blob_pathname,
+      coalesce(array_agg(b.payload_blob_pathname) filter (where b.payload_blob_pathname is not null), '{}') batch_paths
+    from import_tasks t
+    left join import_task_batches b on b.task_id = t.id
+    where t.blob_retain_until is not null
+      and t.blob_retain_until <= now()
+      and t.blob_deleted_at is null
+      and t.status in ('completed', 'partial_success', 'failed')
+    group by t.id, t.source_blob_pathname, t.edit_manifest_blob_pathname, t.blob_retain_until
+    order by t.blob_retain_until asc
     limit ${safeLimit}
-  ` as unknown as { task_id: string; unit_id: string }[];
+  ` as unknown as Array<{
+    id: string;
+    source_blob_pathname: string | null;
+    edit_manifest_blob_pathname: string | null;
+    batch_paths: string[];
+  }>;
 
-  const results = await Promise.all(queued.map(async (batch) => {
+  const results: Array<{ task_id: string; deleted_blobs: number; error?: string }> = [];
+  for (const task of tasks) {
     try {
-      const result = await processImportBatch(batch.task_id, batch.unit_id);
-      return { task_id: batch.task_id, unit_id: batch.unit_id, result };
+      const deleted = await deleteImportBlobs([
+        task.source_blob_pathname,
+        task.edit_manifest_blob_pathname,
+        ...task.batch_paths,
+      ]);
+      await sql.transaction([
+        sql`update import_tasks set blob_deleted_at = now() where id = ${task.id} and blob_deleted_at is null`,
+        sql`insert into trace_events (id, trace_id, task_id, event_name, event_status, message, metadata)
+          select gen_random_uuid(), trace_id, id, 'ImportBlobsDeleted', 'success', '已按保留策略清理导入 Blob',
+            ${JSON.stringify({ deleted_blobs: deleted })}::jsonb from import_tasks where id = ${task.id}`,
+      ]);
+      results.push({ task_id: task.id, deleted_blobs: deleted });
     } catch (error) {
-      return {
-        task_id: batch.task_id,
-        unit_id: batch.unit_id,
-        error: error instanceof Error ? error.message : String(error),
-      };
+      results.push({
+        task_id: task.id,
+        deleted_blobs: 0,
+        error: error instanceof Error ? error.message : "Blob 清理失败",
+      });
     }
-  }));
-
-  for (const taskId of new Set(queued.map((batch) => batch.task_id))) {
-    await finalizeTask(taskId);
-    taskContextCache.delete(taskId);
   }
-  return results;
+  return {
+    scanned_tasks: tasks.length,
+    cleaned_tasks: results.filter((item) => !item.error).length,
+    failed_tasks: results.filter((item) => item.error).length,
+    deleted_blobs: results.reduce((sum, item) => sum + item.deleted_blobs, 0),
+    results,
+  };
+}
+
+export async function processQueuedBatches() {
+  // 向后兼容旧调用名，但恢复控制面绝不直接执行批次，所有正式消费统一经过 QStash。
+  const result = await runImportRecovery();
+  return [{ control_plane: true, ...result }];
+}
+
+export async function recordQStashFailure(input: {
+  sourceMessageId: string;
+  status?: number;
+  retried?: number;
+  maxRetries?: number;
+  responseBody?: string;
+  sourceBody?: string;
+}) {
+  let event: ImportEventEnvelope | null = null;
+  if (input.sourceBody) {
+    try {
+      event = JSON.parse(Buffer.from(input.sourceBody, "base64").toString("utf8")) as ImportEventEnvelope;
+    } catch {
+      event = null;
+    }
+  }
+  const records = await sql`
+    update event_outbox
+    set status = 'dead-lettered', dead_lettered_at = now(), last_error = ${`QStash 最终投递失败（HTTP ${input.status || 0}）`},
+      last_provider_response = ${JSON.stringify({
+        source_message_id: input.sourceMessageId,
+        status: input.status,
+        retried: input.retried,
+        max_retries: input.maxRetries,
+        response_body: input.responseBody,
+      })}::jsonb
+    where provider_message_id = ${input.sourceMessageId}
+      or (${event?.event_id || null}::uuid is not null and id = ${event?.event_id || null}::uuid)
+    returning aggregate_id, event_type, payload
+  ` as unknown as Array<{ aggregate_id: string; event_type: string; payload: ImportEventEnvelope }>;
+  const record = records[0];
+  if (!record) return { matched: false };
+
+  const payload = record.payload.payload as { unit_id?: string };
+  if (record.event_type === "ImportBatchCreated" && payload.unit_id) {
+    await db.update(importTaskBatches).set({
+      status: "failed",
+      deadLetteredAt: new Date(),
+      lastError: `QStash 重试耗尽：${input.sourceMessageId}`,
+    }).where(and(eq(importTaskBatches.taskId, record.aggregate_id), eq(importTaskBatches.unitId, payload.unit_id)));
+  } else if (record.event_type === "ImportFileUploaded") {
+    await db.update(importTasks).set({
+      status: "failed",
+      processingStage: "dead_lettered",
+      parseLastError: `QStash 重试耗尽：${input.sourceMessageId}`,
+      completedAt: new Date(),
+    }).where(eq(importTasks.id, record.aggregate_id));
+  }
+  await trace(record.aggregate_id, record.payload.trace_id, "QStashDeadLettered", "failed", "QStash 重试耗尽，消息已进入 DLQ", payload.unit_id, {
+    source_message_id: input.sourceMessageId,
+    status: input.status,
+    retried: input.retried,
+    max_retries: input.maxRetries,
+  });
+  return { matched: true, task_id: record.aggregate_id, event_type: record.event_type };
 }
 
 export async function getImportTask(taskId: string): Promise<ImportTaskSummary | null> {

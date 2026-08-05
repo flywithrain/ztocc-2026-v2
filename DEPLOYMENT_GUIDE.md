@@ -1,171 +1,162 @@
-# V2 提交与 Vercel 部署操作指南
+# V2 生产部署手册（Vercel Hobby + QStash + Private Blob + Neon）
 
-## 1. 本次必须提交的文件
+## 1. 架构与职责
 
-至少提交以下类别：
-
-- `src/app/api/import-tasks/**`、`src/app/api/internal/import-worker/route.ts`
-- `src/app/api/import-monitor/**`、`src/app/api/traces/**`
-- `src/app/import-tasks/**`、`src/app/import-monitor/**`、`src/app/traces/**`
-- `src/lib/import-service.ts`、`import-types.ts`、`import-core.ts`、`db-schema.ts`
-- `drizzle/0000_free_tarantula.sql` 及 `drizzle/meta/**`
-- `scripts/seed-data.ts`、压测/集成测试脚本
-- `.env.example`、`next.config.ts`、`vercel.json`、`package.json`、`package-lock.json`
-- `README.md`、验收报告、压测报告和最终验收截图
-
-不要提交 `.env.local`、`.vercel/`、`.next*`、临时 HTTP 输出和旧版压测数据。执行：
-
-```bash
-git status --short
-git check-ignore -v .env.local .next test-data/10000-orders-fixed.xlsx
-npm ci
-npm run deploy:check
+```text
+浏览器 → Vercel Private Blob 客户端直传
+       → POST /api/import-tasks（只提交 Blob 引用）
+       → Neon import_tasks + Transactional Outbox
+       → Upstash QStash Direct Publish（Flow Control 并发 4）
+       → /api/internal/import-events（官方签名验证）
+       → 解析原始文件 / 处理 1,000 行批次 / 批量写 Neon
 ```
 
-## 2. Neon 数据库迁移（部署 Web 前执行）
+QStash 不在 Vercel 控制台中“开启”。请在 Upstash Console 创建 QStash；Vercel 只保存凭据并承载回调 Route。Vercel Blob 则在 Vercel 项目 Storage 中创建和绑定。
 
-1. 在 Neon 创建备份/分支，记录当前 Production 连接串。
-2. 本地 `.env.local` 指向目标 Neon 数据库。
-3. 先检查迁移，再执行迁移：
+## 2. Neon：先备份，再迁移
+
+1. 在 Neon 为当前 Production 创建分支/备份。
+2. 本机 `v2/.env.local` 的 `DATABASE_URL` 指向目标数据库。
+3. 在 `v2` 目录执行：
 
 ```bash
 npm ci
 npm run db:check
 npm run db:migrate
-npm run db:seed
-npm run db:seed-load
 ```
 
-`db:seed-load` 会维护 20,000 条压测 SKU 并生成 10,000 行测试文件；若生产不需要压测主数据，不要执行该命令。不要把 `db:push` 放入 Vercel `buildCommand`，避免每次部署自动修改生产结构。
+本次新增迁移为 `drizzle/0001_dusty_alex_wilder.sql`。它只增加 Blob、处理阶段、QStash message ID、Outbox lease 和 DLQ 字段，并将旧 `file_payload` 改为可空，不删除业务数据。
 
-如果目标数据库已经通过 `db:push` 建好同结构表，先对比实际结构与 `drizzle/0000_free_tarantula.sql`，不要盲目再次执行初始迁移。当前批次表必须含 `processed_rows`、`success_rows`、`failed_rows` 三列。
+不要把 `db:migrate` 或 `db:push` 写进 Vercel Build Command。生产不需要执行 `db:seed-load`，除非明确要写入考试压测 SKU。
 
-## 3. Vercel 项目配置
+## 3. Vercel：项目与 Private Blob
 
-导入 Git 仓库时将 Root Directory 设置为 `v2`（如果 V2 是单独仓库则使用仓库根目录）。Framework 选择 Next.js；Node.js 选择 22.x；启用 Fluid Compute。当前 `vercel.json` 使用 `npm ci` 和 `npm run build`，区域为 `hkg1`。
+1. 导入 Git 项目；若仓库同时含 V2/V3，Root Directory 选择 `v2`。
+2. Framework 选择 Next.js；Node.js 22.x；Build Command 保持 `npm run build`。
+3. 在 **Storage → Create Database → Blob** 创建 Blob Store，并连接当前 V2 项目。
+4. Blob Store 必须使用 **Private** 访问模式。
+5. 连接后 Vercel 通常自动注入 `BLOB_READ_WRITE_TOKEN`；同时记录 Store ID，配置 `BLOB_STORE_ID`。
+6. 开启 Fluid Compute。`vercel.json` 已固定 `hkg1`，无需新增全局中间件。
 
-在 Settings → Environment Variables 配置：
+## 4. Upstash QStash
 
-### 必填
-
-- `DATABASE_URL`：Neon pooled/serverless 连接串。
-- `V2_API_KEY`：V3 调用 `/api/v1/*` 的长随机密钥。
-- `CORS_ALLOWED_ORIGIN`：V3 的完整 Origin，例如 `https://v3.example.com`，不要带尾部 `/`。
-  - V3 项目同时配置 `V2_API_BASE_URL=https://<V2正式域名>`。
-  - V3 项目的 `V2_API_KEY` 必须与 V2 项目的 `V2_API_KEY` 完全一致。
-- `IMPORT_WORKER_TOKEN`：手工或外部 Worker 调用内部处理接口的独立长随机密钥。
-- `IMPORT_BATCH_SIZE=1000`
-- `IMPORT_WORKER_CONCURRENCY=4`
-- `SKU_VALIDATION_TIMEOUT_MS=3000`
-
-### AI 功能启用时必填
-
-- `DEEPSEEK_API_URL`
-- `DEEPSEEK_API_KEY`
-- `DEEPSEEK_MODEL`
-
-### 采用 Vercel Cron 时必填
-
-- `CRON_SECRET`：至少 16 位，且不要与 `V2_API_KEY`、`IMPORT_WORKER_TOKEN` 复用。
-
-### 采用外部队列时必填
-
-- `IMPORT_QUEUE_WEBHOOK_URL`
-- `IMPORT_QUEUE_WEBHOOK_TOKEN`
-
-这两个变量必须同时设置。Preview 与 Production 建议使用不同 Neon 分支和不同密钥。
-
-## 4. Worker / 队列选择
-
-### 方案 A：当前版本直接部署（可验收）
-
-创建任务后，Route Handler 使用 Next.js `after()` 在响应返回后处理批次，不再依赖用户打开任务详情页。导入路由和 Worker 路由 `maxDuration=120`。Vercel 当前 Fluid Compute Hobby 上限为 300 秒，Pro/Enterprise 默认 300 秒，因此 56.798 秒实测处理有余量。
-
-同时保留受保护恢复入口：
+1. 登录 Upstash Console，进入 QStash。
+2. 从 QStash 控制台复制：
+   - Token；
+   - Current Signing Key；
+   - Next Signing Key。
+3. 不需要在控制台手工创建 FIFO Queue。代码使用 Direct Publish，并设置 Flow Control：
+   - key：`v2-import-worker`；
+   - parallelism：`4`；
+   - retries：`3`；
+   - failure callback：`/api/internal/import-events/failure`。
+4. 部署完成后，在 QStash Schedules 创建两个计划任务：
 
 ```text
-GET/POST /api/internal/import-worker?limit=4
+每 5 分钟：POST https://<V2正式域名>/api/internal/import-worker
+每 1 小时：POST https://<V2正式域名>/api/internal/import-cleanup
+Body: {"limit":25}
 ```
 
-手工调用需请求头：
+两个路由都验证 QStash 官方签名。`import-worker` 只恢复卡死批次并重投 Outbox，不直接绕过队列落库；`import-cleanup` 只清理已结束任务且超过 `blob_retain_until` 的 `imports/source`、`imports/manifests`、`imports/batches` 对象。Vercel Hobby Cron 不是主调度方式。
 
-```text
-X-Worker-Token: <IMPORT_WORKER_TOKEN>
+## 5. Vercel Production 环境变量
+
+### 必填：数据库、应用地址、QStash、Blob
+
+```env
+DATABASE_URL="Neon pooled/serverless 连接串"
+APP_BASE_URL="https://<V2正式域名>"
+QSTASH_TOKEN="..."
+QSTASH_CURRENT_SIGNING_KEY="..."
+QSTASH_NEXT_SIGNING_KEY="..."
+QSTASH_FLOW_CONTROL_KEY="v2-import-worker"
+QSTASH_WORKER_PARALLELISM="4"
+QSTASH_RETRIES="3"
+QSTASH_RETRY_DELAY="1000"
+BLOB_STORE_ID="..."
+BLOB_READ_WRITE_TOKEN="Vercel 绑定 Blob 后生成"
+IMPORT_BLOB_RETENTION_HOURS="24"
+IMPORT_MAX_FILE_SIZE_MB="50"
 ```
 
-该入口每次最多认领 20 个处理单元，利用数据库状态与稳定 ID 保证重复触发安全。
+`APP_BASE_URL` 必须是公开 HTTPS 正式域名，不能带末尾 `/`。QStash 无法回调受 Vercel Deployment Protection 阻挡的 URL。
 
-### 方案 B：正式生产推荐
+### 必填：V2/V3 与导入参数
 
-使用 QStash、Inngest、Trigger.dev 或常驻 Railway/Render/Fly.io Worker 消费 Outbox。`IMPORT_QUEUE_WEBHOOK_URL` 应填写队列提供方的“发布/入队 URL”，而不是 V2 自己的回调地址；Dispatcher 会把统一事件信封 POST 到该 URL，并发送 `Authorization: Bearer <IMPORT_QUEUE_WEBHOOK_TOKEN>`。
-
-在队列提供方将最终消费目标配置为：
-
-```text
-https://<V2正式域名>/api/internal/import-events
+```env
+V2_API_KEY="独立长随机密钥"
+CORS_ALLOWED_ORIGIN="https://<V3正式域名>"
+IMPORT_BATCH_SIZE="1000"
+IMPORT_WORKER_CONCURRENCY="4"
+SKU_VALIDATION_TIMEOUT_MS="3000"
 ```
 
-队列回调同样使用 `Authorization: Bearer <IMPORT_QUEUE_WEBHOOK_TOKEN>`。该入口按 `task_id + unit_id` 只消费一个处理单元；若队列平台不能原样转发 Authorization Header，应在平台中单独配置回调 Header。要求：
+V3 同时配置：
 
-- 至少一次投递；
-- 指数退避；
-- 死信告警；
-- 重复消息安全；
-- 不把 Worker 密钥下发到浏览器。
+```env
+V2_API_BASE_URL="https://<V2正式域名>"
+V2_API_KEY="与 V2 完全一致"
+```
 
-### Vercel Cron 注意事项
+### 可选
 
-Vercel Cron 可调用 `/api/internal/import-worker?limit=4`，并会自动发送 `Authorization: Bearer <CRON_SECRET>`。但 Hobby 计划 Cron 只能每天一次，不适合 2 秒或分钟级队列消费；因此仓库没有默认写入高频 `crons`，避免 Hobby 部署直接失败。Pro 可按需要在 `vercel.json` 增加分钟级恢复扫描，但 Cron 是 best effort、失败不自动重试，只应作为恢复机制，不应替代正式队列。
+```env
+IMPORT_WORKER_TOKEN="手工执行恢复控制面的应急密钥"
+IMPORT_CLEANUP_TOKEN="手工执行 Blob 清理的独立应急密钥"
+DEEPSEEK_API_URL="..."
+DEEPSEEK_API_KEY="..."
+DEEPSEEK_MODEL="..."
+```
 
-## 5. 请求体与文件上传边界
+AI 规则生成未启用时，三个 DeepSeek 变量可不配。不要再配置旧变量 `IMPORT_QUEUE_WEBHOOK_URL`、`IMPORT_QUEUE_WEBHOOK_TOKEN`、`CRON_SECRET`。
 
-Vercel Function 请求/响应体上限为 4.5 MB；`next.config.ts` 的 `serverActions.bodySizeLimit` 不控制 `/api/import-tasks` Route Handler。当前最终 10,000 行测试 JSON 实测约 3.476 MiB，可以上线，但余量有限。接口已在 `Content-Length > 4 MiB` 时提前返回 413，避免贴近平台硬限制。
+## 6. 必须提交的新增/修改配置与运行文件
 
-扩展到更长地址、更多字段或 50,000 行前，必须改为：浏览器直传 S3/R2/Vercel Blob → API 只提交对象键、规则 ID 和校验信息 → Worker 流式下载/解析。不要简单调大 Next 配置，因为无法突破 Vercel 的 4.5 MB Function 限制。
+- 依赖：`package.json`、`package-lock.json`
+- 环境模板：`.env.example`
+- 忽略与静态检查：`.gitignore`、`eslint.config.mjs`
+- 数据库：`src/lib/db-schema.ts`、`drizzle/0001_dusty_alex_wilder.sql`、`drizzle/meta/*`
+- Blob：`src/lib/blob-paths.ts`、`src/lib/blob-storage.ts`、`src/app/api/import-files/upload/route.ts`
+- QStash：`src/lib/qstash-publisher.ts`、`src/lib/qstash-receiver.ts`
+- 消费、恢复与清理：`src/app/api/internal/import-events/**`、`src/app/api/internal/import-worker/route.ts`、`src/app/api/internal/import-cleanup/route.ts`
+- 主链路：`src/lib/import-service.ts`、`src/lib/import-types.ts`、`src/lib/file-reader.ts`
+- 前端与任务 API：`src/app/page.tsx`、`src/app/preview/page.tsx`、`src/app/api/import-tasks/route.ts`
+- 监控：`src/app/api/import-monitor/summary/route.ts`、`src/app/import-monitor/page.tsx`
 
-## 6. 是否需要新增中间件
+不要提交 `.env.local`、`.vercel/`、`.next*`、`node_modules/`、`*.tgz`。
 
-本次不需要 `middleware.ts` 或 Next.js 16 `proxy.ts`：
+## 7. 发布门禁与部署后验收
 
-- `/api/v1/*` 四个路由已逐路由校验 `V2_API_KEY`，未配置时 fail-closed；
-- Worker 路由校验 `IMPORT_WORKER_TOKEN` 或 `CRON_SECRET`；
-- 全局中间件无法替代服务到服务签名和任务级幂等；
-- 站内页面/API 尚无用户账号体系，若公开给真实用户，仍需接入 Auth.js/Clerk/企业 SSO 和租户隔离。
+部署前在 `v2` 执行：
 
-`/api/rules/seed` 已在 Production 返回 403；生产初始化改为部署前运行 `npm run db:seed`。AI 调用日志已移除 API Key 前后缀和完整模型响应。
+```bash
+npm ci
+npm run db:check
+npm run test:async-import
+RUN_NEON_INTEGRATION_TEST=true npm run test:async-import:integration
+npm run lint
+npm run typecheck
+npm run build
+```
 
-## 7. 部署与上线验收
+部署后先验证：
 
-1. 运行 `npm run deploy:check`，确保单元测试、Lint、类型检查和生产构建全部通过。
-2. 提交并推送 Git。
-3. 先部署 Preview；确认 Preview 使用 Neon 测试分支。
-4. 验证健康链路：
-   - 首页和规则列表可访问；
-   - `POST /api/rules/seed` 在 Production/生产构建返回 403；
-   - 无 Worker Token 调用 `/api/internal/import-worker` 返回 401；
-   - 错误 API Key 调用 `/api/v1/shipments` 返回 401；
-   - 正确 API Key 返回 200；
-   - 创建小任务后不打开详情页也能自动完成；
-   - 重复触发 Worker 不重复入库；
-   - 监控页和 Trace 页可查询；
-   - CSV 错误导出正常。
-5. 用 10,000 行最终 Excel 执行一次 Preview 压测，再在 Production 至少执行 20 次创建请求，计算上传 P95。
-6. 确认 Vercel Logs 无 413、504、密钥片段、完整 AI 响应或未脱敏个人信息。
-7. 将 Production Deployment 设为正式域名，再把 `CORS_ALLOWED_ORIGIN` 更新为 V3 正式域名并重新部署。
+1. 首页上传文件时，浏览器直接上传 Private Blob；
+2. `/api/import-tasks` 请求体不含 `rows`，并在 1 秒内返回 202；
+3. 无 `Upstash-Signature` 调用 `/api/internal/import-events` 返回 401；
+4. QStash Logs 能看到 `ImportFileUploaded` 和 10 个 `ImportBatchCreated` 消息；
+5. 监控页显示 QStash published、Outbox pending/failed、DLQ、队列等待与活跃 Worker；
+6. 重复投递同一批次不会重复入库；
+7. 最终失败进入 QStash DLQ，并同步数据库 `dead-lettered`；
+8. 10,000 行全链路不超过 60 秒，无 500/504。
+
+您部署完成后只需提供：V2 正式 URL、可用规则 ID、是否关闭 Deployment Protection。不要在聊天中发送 Neon、QStash、Blob 或 API 密钥；助手将直接对正式 URL 完成 20 次创建 P95、10,000 行、幂等、重试、恢复、DLQ 和监控验收。
 
 ## 8. 回滚
 
-- 应用异常：在 Vercel Deployments 对上一稳定版本执行 Promote/Instant Rollback。
-- 数据库迁移异常：应用回滚不等于数据库回滚；先停止 Worker/外部队列，使用 Neon 分支恢复或预先准备的反向 SQL。
-- 队列异常：清空 `IMPORT_QUEUE_WEBHOOK_URL` 并重新部署可回到 PostgreSQL 队列 + `after()` 模式；不要删除 Outbox 事件。
-- 批次卡死：调用受保护的 `/api/internal/import-worker?limit=4`，它会先恢复锁定超过 5 分钟的批次。
-
-## 9. 当前上线前仍需用户完成的外部事项
-
-- 提供 Git 仓库地址并推送代码。
-- 在 Vercel 创建/绑定项目和正式域名。
-- 配置上述 Production/Preview 环境变量。
-- 确认 Vercel 计划与 Fluid Compute 设置。
-- 选择是否接入正式外部队列；考试演示可先用方案 A，真实业务推荐方案 B。
-- 执行 Neon 备份/分支与迁移。
-- 部署后提供 Vercel URL，完成 20 次上传 P95 和线上 10,000 行复测。
+1. 先暂停 QStash Schedule，必要时在 QStash 控制台暂停/停止新消息。
+2. 在 Vercel Deployments 将上一稳定版本 Promote/Instant Rollback。
+3. 不要删除 Outbox、批次或 DLQ 记录；它们是恢复和审计依据。
+4. 数据库迁移是向后兼容加列，旧应用可继续运行；若必须数据库回退，优先切回 Neon 备份分支，不直接在生产执行破坏性 DROP COLUMN。
+5. Blob 默认保留 24 小时；排障完成前不要提前清理相关 source/manifest/batch Blob。

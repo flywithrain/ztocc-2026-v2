@@ -6,7 +6,9 @@ import { FileUploadZone } from "@/components/upload/file-upload-zone";
 import { RuleSelector } from "@/components/upload/rule-selector";
 import { ProgressBar } from "@/components/shared/progress-bar";
 import { useToast } from "@/components/shared/toast";
+import { upload } from "@vercel/blob/client";
 import { readFile } from "@/lib/file-reader";
+import { buildSourceBlobPath } from "@/lib/blob-paths";
 import { parseFile } from "@/lib/parse-engine";
 import { validateOrders, checkExternalCodeDuplicates, checkReceiverConsistency } from "@/lib/validators";
 import { getAllRules, getExistingExternalCodes } from "@/lib/server-actions";
@@ -19,6 +21,7 @@ export default function HomePage() {
 
   const [file, setFile] = useState<File | null>(null);
   const [parsedFile, setParsedFile] = useState<ParsedFile | null>(null);
+  const [sourceBlob, setSourceBlob] = useState<{ url: string; pathname: string; contentType: string; size: number; fileHash: string } | null>(null);
   const [rules, setRules] = useState<ParseRule[]>([]);
   const [selectedRule, setSelectedRule] = useState<ParseRule | null>(null);
   const [progress, setProgress] = useState<ParseProgress>({
@@ -31,14 +34,30 @@ export default function HomePage() {
 
   const handleFileSelected = useCallback(async (file: File) => {
     setFile(file);
+    setSourceBlob(null);
     setSelectedRule(null);
     setProgress({ current: 0, total: 0, percent: 0, status: "idle" });
 
     try {
-      setProgress({ current: 0, total: 1, percent: 10, status: "parsing" });
-      const parsed = await readFile(file);
+      setProgress({ current: 0, total: 1, percent: 5, status: "parsing" });
+      const [parsed, digest] = await Promise.all([
+        readFile(file),
+        crypto.subtle.digest("SHA-256", await file.arrayBuffer()),
+      ]);
       setParsedFile(parsed);
-      setProgress({ current: 1, total: 1, percent: 50, status: "parsing" });
+      setProgress({ current: 0, total: 1, percent: 35, status: "parsing" });
+      const blob = await upload(buildSourceBlobPath(file.name), file, {
+        access: "private",
+        handleUploadUrl: "/api/import-files/upload",
+        multipart: file.size > 5 * 1024 * 1024,
+        contentType: file.type || undefined,
+        onUploadProgress: ({ percentage }) => {
+          setProgress({ current: 0, total: 1, percent: 35 + Math.round(percentage * 0.45), status: "parsing" });
+        },
+      });
+      const fileHash = Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      setSourceBlob({ url: blob.url, pathname: blob.pathname, contentType: blob.contentType, size: file.size, fileHash });
+      setProgress({ current: 1, total: 1, percent: 85, status: "parsing" });
 
       const rulesList = await getAllRules();
       setRules(rulesList);
@@ -51,7 +70,10 @@ export default function HomePage() {
   }, [showToast]);
 
   const handleParseWithRule = useCallback(async (rule: ParseRule) => {
-    if (!parsedFile) return;
+    if (!parsedFile || !sourceBlob) {
+      showToast("原始文件尚未完成 Private Blob 上传", "error");
+      return;
+    }
     setSelectedRule(rule);
     setLoading(true);
     const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -87,6 +109,7 @@ export default function HomePage() {
         fileName: parsedFile.fileName,
         ruleName: rule.name,
         ruleId: rule.id,
+        sourceBlob,
         parseDuration: Math.round(duration),
       })
     );
@@ -95,7 +118,7 @@ export default function HomePage() {
     setLoading(false);
 
     router.push("/preview");
-  }, [parsedFile, router, showToast]);
+  }, [parsedFile, sourceBlob, router, showToast]);
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-8">

@@ -1,8 +1,7 @@
 import * as XLSX from "xlsx";
 import type { RawRow, ParsedFile } from "@/types";
 
-export async function readExcel(file: File): Promise<ParsedFile> {
-  const buffer = await file.arrayBuffer();
+export function readExcelBuffer(buffer: ArrayBuffer | Uint8Array, fileName: string): ParsedFile {
   const workbook = XLSX.read(buffer, { type: "array" });
 
   const sheets = workbook.SheetNames.map((name) => {
@@ -27,11 +26,15 @@ export async function readExcel(file: File): Promise<ParsedFile> {
   const allRows = sheets.length > 0 ? sheets[0].rows : [];
 
   return {
-    fileName: file.name,
+    fileName,
     fileType: "excel",
     sheets: sheets.length > 1 ? sheets : undefined,
     rows: allRows,
   };
+}
+
+export async function readExcel(file: File): Promise<ParsedFile> {
+  return readExcelBuffer(await file.arrayBuffer(), file.name);
 }
 
 export async function readPdf(file: File): Promise<ParsedFile> {
@@ -151,4 +154,47 @@ export async function readFile(file: File): Promise<ParsedFile> {
     return readPdf(file);
   }
   throw new Error(`不支持的文件格式: .${ext}`);
+}
+
+export async function readFileBuffer(buffer: Buffer | Uint8Array, fileName: string, mimeType?: string): Promise<ParsedFile> {
+  const ext = fileName.split(".").pop()?.toLowerCase();
+  if (ext === "xlsx" || ext === "xls") {
+    return readExcelBuffer(buffer, fileName);
+  }
+  if (ext === "pdf" || mimeType === "application/pdf") {
+    // pdfjs-dist 在 Node Worker 中无需浏览器 worker；disableWorker 避免加载 public 资源。
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
+    interface Frag { x: number; y: number; page: number; str: string }
+    const frags: Frag[] = [];
+    let sampleText = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageFrags: Frag[] = [];
+      for (const item of textContent.items) {
+        if ("str" in item && "transform" in item) {
+          const text = item.str.trim();
+          if (text) pageFrags.push({ x: item.transform[4], y: item.transform[5], page: i, str: text });
+        }
+      }
+      frags.push(...pageFrags);
+      sampleText += `--- Page ${i} ---\n${groupByLine(pageFrags).map((line) => line.map((frag) => frag.str).join(" ")).join("\n")}\n\n`;
+    }
+    const anchors = computeColumnAnchors(frags.map((frag) => frag.x));
+    return {
+      fileName,
+      fileType: "pdf",
+      sampleText,
+      rows: groupByLine(frags).map((line, index) => {
+        const cells: (string | null)[] = new Array(anchors.length).fill(null);
+        for (const frag of line) {
+          const column = nearestAnchor(frag.x, anchors);
+          cells[column] = cells[column] ? `${cells[column]} ${frag.str}` : frag.str;
+        }
+        return { rowNum: index + 1, cells };
+      }),
+    };
+  }
+  throw new Error(`不支持的服务端文件格式: .${ext}`);
 }

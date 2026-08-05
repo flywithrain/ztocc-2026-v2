@@ -8,6 +8,13 @@
       "when": 1785770661456,
       "tag": "0000_free_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785854009966,
+      "tag": "0001_dusty_alex_wilder",
+      "breakpoints": true
     }
   ]
 }

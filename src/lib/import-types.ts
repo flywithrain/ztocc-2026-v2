@@ -9,6 +9,19 @@ export interface ImportTaskPayload {
   rows: OrderRow[];
 }
 
+export interface BlobImportTaskInput {
+  fileName: string;
+  parseRuleId: string;
+  sourceBlobUrl: string;
+  sourceBlobPathname: string;
+  editManifestBlobUrl?: string | null;
+  editManifestBlobPathname?: string | null;
+  fileHash: string;
+  fileMime?: string | null;
+  fileSize: number;
+  totalRowsHint?: number;
+}
+
 export interface ImportTaskSummary {
   task_id: string;
   trace_id: string;

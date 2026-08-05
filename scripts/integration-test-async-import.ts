@@ -38,9 +38,13 @@ async function main() {
       (select count(*)::int from trace_events where task_id = ${created.task_id} and event_name = 'ImportTaskCreated') created_trace`;
     assert.deepEqual(atomic, { batches: 1, outbox: 2, created_trace: 1 }, "任务、批次、Outbox、Trace 必须完整创建");
 
-    const first = await service.processPendingBatches(created.task_id);
+    const first = await service.processImportBatch(created.task_id, "batch_0001", {
+      messageId: `integration-${suffix}`,
+      deliveryAttempt: 1,
+    });
+    await service.finalizeTask(created.task_id);
     const firstTask = await service.getImportTask(created.task_id);
-    assert.equal(first.length, 1);
+    assert.equal(first.idempotent, false);
     assert.equal(firstTask?.status, "partial_success");
     assert.equal(firstTask?.processed_rows, 2);
     assert.equal(firstTask?.success_rows, 1);
@@ -49,11 +53,14 @@ async function main() {
     const beforeRetry = await sql`select
       (select count(*)::int from shipments where batch_id = ${created.task_id}) shipments,
       (select count(*)::int from import_task_errors where task_id = ${created.task_id}) errors`;
-    const second = await service.processPendingBatches(created.task_id);
+    const second = await service.processImportBatch(created.task_id, "batch_0001", {
+      messageId: `integration-${suffix}-retry`,
+      deliveryAttempt: 2,
+    });
     const afterRetry = await sql`select
       (select count(*)::int from shipments where batch_id = ${created.task_id}) shipments,
       (select count(*)::int from import_task_errors where task_id = ${created.task_id}) errors`;
-    assert.equal(second.length, 0, "完成任务再次消费不应认领批次");
+    assert.equal(second.idempotent, true, "完成任务再次消费不应认领批次");
     assert.deepEqual(afterRetry, beforeRetry, "重复消费不得重复写入运单或错误");
 
     await sql`update import_task_batches set status = 'processing', locked_at = now() - interval '10 minutes' where task_id = ${created.task_id}`;
@@ -63,12 +70,20 @@ async function main() {
     const [signals] = await sql`select
       (select count(*)::int from import_task_errors where task_id = ${created.task_id} and row_number = 2 and error_code = 'E001') row_error,
       (select count(*)::int from trace_events where task_id = ${created.task_id} and event_name in ('ImportBatchStarted','ImportBatchSucceeded','ImportTaskPartialSuccess')) trace_events,
-      (select count(*)::int from batch_performance_log where task_id = ${created.task_id}) performance_logs`;
+      (select count(*)::int from batch_performance_log where task_id = ${created.task_id}) performance_logs,
+      (select max(delivery_attempt)::int from import_task_batches where task_id = ${created.task_id}) delivery_attempt`;
     assert.equal(signals.row_error, 1);
     assert.ok(signals.trace_events >= 3);
     assert.equal(signals.performance_logs, 1);
+    assert.equal(signals.delivery_attempt, 1, "幂等拒绝的重复投递不得覆盖已处理批次的交付元数据");
 
-    console.log(JSON.stringify({ ok: true, task_id: created.task_id, assertions: 14, signals }, null, 2));
+    console.log(JSON.stringify({
+      ok: true,
+      scope: "Neon database consumer core; QStash/Blob contracts are covered by qstash-blob.test.ts",
+      task_id: created.task_id,
+      assertions: 15,
+      signals,
+    }, null, 2));
   } finally {
     await sql.transaction([
       sql`delete from orders where shipment_id in (select id from shipments where batch_id = ${created.task_id})`,

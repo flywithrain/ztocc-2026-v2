@@ -16,13 +16,15 @@
     "db:seed": "npx tsx scripts/seed.ts",
     "db:seed-load": "npx tsx scripts/seed-data.ts",
     "load:test": "npx tsx scripts/load-test.ts",
-    "test:async-import": "npx tsx --test src/lib/__tests__/import-core.test.ts",
+    "test:async-import": "npx tsx --test src/lib/__tests__/*.test.ts",
     "test:async-import:integration": "npx tsx scripts/integration-test-async-import.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
     "@tanstack/react-virtual": "^3.14.2",
+    "@upstash/qstash": "^2.11.3",
+    "@vercel/blob": "^2.6.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",

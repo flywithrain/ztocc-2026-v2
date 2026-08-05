@@ -31,6 +31,9 @@ yarn-error.log*
 .pnpm-debug.log*
 /scripts/_*.js
 
+# npm pack / 本地依赖调研临时包
+/*.tgz
+
 # env files（提交无密钥模板，忽略真实配置）
 .env*
 !.env.example
@@ -49,6 +52,12 @@ next-env.d.ts
 /test-data/*
 !/test-data/10000-orders-fixed.xlsx
 
-# 中间页面截图；最终验收截图保留提交
+# 中间页面截图与本地 HTTP/浏览器烟测产物；最终验收截图保留提交
 /monitor-page.png
 /task-page.png
+/.local-home-check.html
+/.production-home-check.html
+/.monitor-check.json
+/home-snapshot.yaml
+/monitor-snapshot.yaml
+/monitor-loaded-snapshot.yaml
