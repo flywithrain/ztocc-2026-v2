@@ -66,6 +66,7 @@
 ## 6. 模块九 Trace 检索验收
 
 - 独立入口：顶部导航 `Trace 检索` → `/traces`。
+- Trace ID 获取入口：监控页“最近导入任务”直接展示每条记录的完整 `task_id` 和 `trace_id`，并提供“任务详情”“Trace 链路”双入口，运维不需要预先复制或猜测 trace_id。
 - 六类搜索条件：`task_id`、`trace_id`、文件名、批次号、行号范围、错误码；支持组合查询。
 - 详情聚合：`/api/traces/[traceId]` 返回 `import_tasks`、解析规则、原文件/兼容载荷引用、Trace 事件、Outbox、QStash message/delivery、批次、性能日志、行级错误和 DB 写入计数。
 - 时间线按 API → Blob → Outbox → Queue/Worker → DB 分阶段展示；新任务显式写入 API 接收、ID 生成、文件引用保存、行数预扫描、任务记录创建、队列消费、批量校验和数据库写入事件。
