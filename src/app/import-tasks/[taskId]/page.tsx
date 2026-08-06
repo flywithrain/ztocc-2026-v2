@@ -74,7 +74,7 @@ export default function ImportTaskPage({ params }: { params: Promise<{ taskId: s
     </div>
     {task.degraded && <div className="alert alert-warning mb-5 flex items-start gap-2"><AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0" /><div><strong>SKU 校验已降级</strong><p className="text-xs">{task.degraded_reason || "本次导入未经过商品主数据完整校验，数据可能需要后续复核。"}</p></div></div>}
 
-    <section className="card mb-5 overflow-hidden border-0 bg-[#102e3a] text-white shadow-[0_14px_40px_rgba(16,46,58,.18)]">
+    <section className="card import-progress-card mb-5 overflow-hidden border-0">
       <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs uppercase tracking-[0.2em] text-[#8ec7c5]">Asynchronous Import / Live</p><p className="mt-2 text-4xl font-semibold tracking-tight">{percent}<span className="ml-1 text-xl text-[#8ec7c5]">%</span></p><p className="mt-1 text-sm text-[#b6cfce]">{task.processed_rows.toLocaleString()} / {task.total_rows.toLocaleString()} 行已处理</p></div><div className="text-right text-sm text-[#b6cfce]"><p>当前吞吐 <strong className="text-white">{task.throughput.toLocaleString()} 行/分钟</strong></p><p>预计剩余 {task.eta_seconds == null ? "—" : `${task.eta_seconds} 秒`}</p><p>批次 {task.completed_batches} / {task.total_batches}</p></div></div>
       <div className="mt-6 h-2 overflow-hidden rounded-full bg-white/15"><div className="h-full rounded-full bg-[#70e1cf] transition-all duration-700" style={{ width: `${percent}%` }} /></div>
       <div className="mt-4 flex items-center justify-between text-xs text-[#8fb4b4]"><span>后台 Worker 自动消费，状态每 2 秒刷新</span><span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-[#70e1cf]" />trace {task.trace_id}</span></div>

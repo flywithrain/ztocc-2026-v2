@@ -66,6 +66,16 @@ body {
   box-shadow: var(--shadow-card-hover);
 }
 
+.card.import-progress-card {
+  background: #102e3a;
+  color: #ffffff;
+  box-shadow: 0 14px 40px rgba(16, 46, 58, 0.18);
+}
+
+.card.import-progress-card:hover {
+  box-shadow: 0 16px 44px rgba(16, 46, 58, 0.22);
+}
+
 /* ====== 按钮基础样式 ====== */
 .btn-primary {
   display: inline-flex;

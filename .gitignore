@@ -61,3 +61,6 @@ next-env.d.ts
 /home-snapshot.yaml
 /monitor-snapshot.yaml
 /monitor-loaded-snapshot.yaml
+/task-live-before.png
+/task-live-before.yaml
+/task-fixed-snapshot.yaml
