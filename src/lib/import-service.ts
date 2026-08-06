@@ -126,6 +126,13 @@ export async function createBlobImportTask(input: BlobImportTaskInput) {
     occurred_at: new Date().toISOString(),
     payload: { task_id: taskId },
   };
+  const initialTraceEvents = [
+    { event_name: "ImportApiAccepted", event_status: "success", message: "导入 API 已接收文件引用请求", metadata: { file_name: input.fileName, request_mode: "private_blob_reference" } },
+    { event_name: "ImportIdentifiersGenerated", event_status: "success", message: "已生成 task_id 与 trace_id", metadata: { task_id: taskId, trace_id: traceId } },
+    { event_name: "ImportFileReferenceSaved", event_status: "success", message: "原始文件可复读引用已验证并保存", metadata: { source_pathname: input.sourceBlobPathname, file_size: source.size, file_mime: input.fileMime || source.contentType, retention_hours: retentionHours } },
+    { event_name: "ImportRowCountPrescanned", event_status: "success", message: `预扫描得到总行数提示 ${Math.max(0, input.totalRowsHint || 0)} 行`, metadata: { total_rows_hint: Math.max(0, input.totalRowsHint || 0), final_count_pending_worker_parse: true } },
+    { event_name: "ImportTaskRecordCreated", event_status: "success", message: "import_tasks 任务记录与 Transactional Outbox 已原子创建", metadata: { task_id: taskId, trace_id: traceId, outbox_event_id: eventId, outbox_event_type: envelope.event_type } },
+  ];
 
   await sql`
     with task_insert as (
@@ -144,9 +151,11 @@ export async function createBlobImportTask(input: BlobImportTaskInput) {
       from task_insert returning id
     )
     insert into trace_events (id, trace_id, task_id, event_name, event_status, message, metadata)
-    select gen_random_uuid(), ${traceId}, id, 'ImportFileUploaded', 'success', '原始文件已保存到 Private Blob，等待 QStash 投递',
-      ${JSON.stringify({ source_pathname: input.sourceBlobPathname, file_size: source.size, retention_hours: retentionHours })}::jsonb
-    from task_insert where exists (select 1 from outbox_insert)
+    select gen_random_uuid(), ${traceId}, task_insert.id, x.event_name, x.event_status, x.message, x.metadata
+    from task_insert
+    cross join jsonb_to_recordset(${JSON.stringify(initialTraceEvents)}::jsonb)
+      as x(event_name varchar, event_status varchar, message text, metadata jsonb)
+    where exists (select 1 from outbox_insert)
   `;
 
   return {
@@ -483,6 +492,14 @@ export async function processImportBatch(taskId: string, unitId: string, deliver
     `);
     queries.push(
       sql`update import_task_batches set status = 'completed', processed_rows = ${rows.length}, success_rows = ${successfulRows.length}, failed_rows = ${errorsByRow.size}, completed_at = now(), last_error = null where id = ${batch.id}`,
+      sql`insert into trace_events (id, trace_id, task_id, unit_id, event_name, event_status, message, metadata)
+          values (gen_random_uuid(), ${task.traceId}, ${taskId}, ${unitId}, 'ImportBatchValidated', 'success',
+            ${`${unitId} 批量校验完成：${validationErrors.length} 个字段错误，影响 ${errorsByRow.size} 行`},
+            ${JSON.stringify({ batch_index: batch.batch_index, validate_duration_ms: validateDurationMs, error_fields: validationErrors.length, error_rows: errorsByRow.size, degraded })}::jsonb)`,
+      sql`insert into trace_events (id, trace_id, task_id, unit_id, event_name, event_status, message, metadata)
+          values (gen_random_uuid(), ${task.traceId}, ${taskId}, ${unitId}, 'ImportDatabaseWritten', 'success',
+            ${`${unitId} 已完成数据库批量写入：${shipmentRows.length} 个运单，${orderRows.length} 条 SKU 明细`},
+            ${JSON.stringify({ batch_index: batch.batch_index, shipment_count: shipmentRows.length, order_count: orderRows.length, success_rows: successfulRows.length })}::jsonb)`,
       sql`insert into batch_performance_log (id, task_id, unit_id, batch_index, parse_duration_ms, rule_duration_ms, validate_duration_ms, insert_duration_ms, total_duration_ms, status, trace_id)
           values (gen_random_uuid(), ${taskId}, ${unitId}, ${batch.batch_index}, 0, 0, ${validateDurationMs},
             greatest(0, extract(epoch from (clock_timestamp() - ${batchStartedAt}::timestamptz)) * 1000 - ${validateDurationMs})::int,
@@ -653,6 +670,7 @@ export async function processImportEvent(
   if (typeof payload.task_id !== "string") throw new Error("导入事件缺少 task_id");
 
   if (event.event_type === "ImportFileUploaded") {
+    await trace(payload.task_id, event.trace_id, "ImportQueueConsumed", "processing", "QStash 已投递 ImportFileUploaded，Worker 开始读取原始文件", undefined, { qstash_message_id: delivery?.messageId || null, delivery_attempt: delivery?.deliveryAttempt || 0, event_type: event.event_type });
     const result = await processImportFile(payload.task_id);
     await dispatchOutbox(payload.task_id);
     return result;
@@ -662,6 +680,7 @@ export async function processImportEvent(
   }
 
   try {
+    await trace(payload.task_id, event.trace_id, "ImportQueueConsumed", "processing", `${payload.unit_id} 已由 QStash 投递给 Worker`, payload.unit_id, { qstash_message_id: delivery?.messageId || null, delivery_attempt: delivery?.deliveryAttempt || 0, event_type: event.event_type });
     const result = await processImportBatch(payload.task_id, payload.unit_id, delivery);
     await finalizeTask(payload.task_id);
     return result;

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Upload, Settings, ListOrdered, Sparkles, Activity } from "lucide-react";
+import { Upload, Settings, ListOrdered, Sparkles, Activity, RadioTower } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -10,6 +10,7 @@ const navItems = [
   { href: "/rules", label: "规则管理", icon: Settings },
   { href: "/orders", label: "运单列表", icon: ListOrdered },
   { href: "/import-monitor", label: "导入监控", icon: Activity },
+  { href: "/traces", label: "Trace 检索", icon: RadioTower },
 ];
 
 export function NavBar() {
