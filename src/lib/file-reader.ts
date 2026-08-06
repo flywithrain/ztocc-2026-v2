@@ -9,7 +9,8 @@ export function readExcelBuffer(buffer: ArrayBuffer | Uint8Array, fileName: stri
     const jsonData = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
       header: 1,
       defval: null,
-      blankrows: false,
+      // 保留空行以维持原文件物理行号；解析引擎会跳过全空数据行。
+      blankrows: true,
     });
 
     const rows: RawRow[] = (jsonData as unknown as unknown[][]).map((rowArr, idx) => ({

@@ -82,6 +82,10 @@ export const importTasks = pgTable("import_tasks", {
   processingStage: varchar("processing_stage", { length: 50 }).notNull().default("file_uploaded"),
   parseRetryCount: integer("parse_retry_count").notNull().default(0),
   parseLastError: text("parse_last_error"),
+  parseClaimToken: uuid("parse_claim_token"),
+  parseLeaseExpiresAt: timestamp("parse_lease_expires_at"),
+  parseDurationMs: integer("parse_duration_ms").notNull().default(0),
+  ruleDurationMs: integer("rule_duration_ms").notNull().default(0),
   blobRetainUntil: timestamp("blob_retain_until"),
   blobDeletedAt: timestamp("blob_deleted_at"),
   parsedAt: timestamp("parsed_at"),
@@ -92,6 +96,7 @@ export const importTasks = pgTable("import_tasks", {
   index("import_tasks_status_created_idx").on(table.status, table.createdAt),
   index("import_tasks_trace_idx").on(table.traceId),
   index("import_tasks_file_hash_idx").on(table.fileHash),
+  index("import_tasks_parse_lease_idx").on(table.processingStage, table.parseLeaseExpiresAt),
 ]);
 
 export const importTaskBatches = pgTable("import_task_batches", {

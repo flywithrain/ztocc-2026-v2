@@ -26,7 +26,7 @@ Browser → Private Blob Client Upload
 - `POST /api/import-tasks`：仅接受 source/manifest Blob 引用、规则、SHA-256、大小；拒绝完整 `rows`。
 - `POST /api/internal/import-events`：QStash 官方签名 Consumer。
 - `POST /api/internal/import-events/failure`：重试耗尽后的 failure callback/DLQ 同步。
-- `GET|POST /api/internal/import-worker`：恢复卡死批次并重投 Outbox，不直接绕过队列消费。
+- `GET|POST /api/internal/import-worker`：恢复过期 `publishing` Outbox、卡死文件解析和卡死批次并重投，不直接绕过队列消费。
 - `POST /api/internal/import-cleanup`：清理超过保留期的导入 Blob。
 
 ## 初始化
@@ -61,7 +61,7 @@ npm run typecheck
 npm run build
 ```
 
-当前测试覆盖 10,000 行稳定分批、部分成功、最终聚合、幂等、Blob 路径/清理白名单、任务 API 禁止 rows、QStash Direct Publish 参数、current/next key 验签、伪造和正文篡改拒绝、message ID/delivery attempt。
+当前测试覆盖 10,000 行稳定分批、部分成功、最终聚合、幂等、原文件物理行号、Blob 路径/清理白名单、任务 API 禁止 rows、QStash Direct Publish 参数、current/next key 验签、伪造和正文篡改拒绝、message ID/delivery attempt。解析与规则引擎的真实总耗时保存在 `import_tasks`，并按批次数均摊到每条 `batch_performance_log`，用于监控阶段 P50/P95/P99。
 
 真实 Neon 消费核心测试需显式授权：
 

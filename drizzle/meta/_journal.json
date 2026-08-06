@@ -15,6 +15,13 @@
       "when": 1785854009966,
       "tag": "0001_dusty_alex_wilder",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786029505213,
+      "tag": "0002_new_ezekiel",
+      "breakpoints": true
     }
   ]
 }

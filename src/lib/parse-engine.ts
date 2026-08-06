@@ -84,12 +84,14 @@ function buildOrderRow(
   record: Record<string, string>,
   kv: Record<string, string>,
   defaults: Record<string, string> | undefined,
-  rowIndex: number
+  rowIndex: number,
+  sourceRowNumber: number
 ): OrderRow {
   const pick = (f: string) => record[f] || kv[f] || defaults?.[f] || "";
   return {
     id: crypto.randomUUID(),
     rowIndex,
+    sourceRowNumber,
     externalCode: pick("externalCode"),
     storeName: pick("storeName"),
     receiverName: pick("receiverName"),
@@ -185,7 +187,7 @@ function collectStandardRows(rows: RawRow[], rule: ParseRule, rowIndexOffset: nu
       if (allEmpty) continue;
     }
 
-    result.push(buildOrderRow(record, kvValues, rule.defaults, rowIndexOffset + rowIdx));
+    result.push(buildOrderRow(record, kvValues, rule.defaults, rowIndexOffset + rowIdx, rowIndexOffset + row.rowNum));
     rowIdx++;
   }
 
@@ -224,7 +226,7 @@ function parseMatrix(rows: RawRow[], rule: ParseRule, rowIndexOffset: number): O
       const qty = Number(row.cells[col]) || 0;
       if (qty <= 0) continue; // 仅为非零数量单元格生成记录
 
-      const base = buildOrderRow(skuRecord, kvValues, rule.defaults, rowIndexOffset + result.length);
+      const base = buildOrderRow(skuRecord, kvValues, rule.defaults, rowIndexOffset + result.length, rowIndexOffset + row.rowNum);
       base.storeName = name;
       base.skuQuantity = qty;
       result.push(base);
@@ -300,7 +302,7 @@ function parseCards(rows: RawRow[], rule: ParseRule, rowIndexOffset: number): Or
     const dataRecord = applyFieldMappings(row, card.dataFieldMappings);
     const qty = Number(dataRecord["skuQuantity"]);
     if (String(dataRecord["skuCode"] ?? "").trim() && qty > 0) {
-      const base = buildOrderRow(dataRecord, {}, rule.defaults, rowIndexOffset + result.length);
+      const base = buildOrderRow(dataRecord, {}, rule.defaults, rowIndexOffset + result.length, rowIndexOffset + row.rowNum);
       base.externalCode = currentMeta["externalCode"] || base.externalCode;
       base.storeName = currentMeta["storeName"] || base.storeName;
       base.receiverName = currentMeta["receiverName"] || base.receiverName;

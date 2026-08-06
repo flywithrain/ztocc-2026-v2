@@ -1,7 +1,10 @@
 // ====== 订单字段类型 ======
 export interface OrderRow {
   id: string;
+  /** 解析结果中的稳定序号，用于编辑、幂等键和批次切分。 */
   rowIndex: number;
+  /** 原文件全局物理行号（1-based）；多 Sheet 文件按 Sheet 原始行数累计。 */
+  sourceRowNumber?: number;
   externalCode: string;
   storeName: string;
   receiverName: string;

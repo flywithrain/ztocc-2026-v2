@@ -14,9 +14,9 @@ type TraceData = { trace_id: string; task: Task; filters: { batch: number | null
 
 const labels: Record<string, string> = {
   ImportApiAccepted: "API 接收文件", ImportIdentifiersGenerated: "生成任务标识", ImportFileReferenceSaved: "保存原文件引用", ImportRowCountPrescanned: "预扫描总行数", ImportTaskRecordCreated: "创建任务记录",
-  ImportFileUploaded: "原文件已上传", QStashPublished: "QStash 入队", QStashPublishFailed: "QStash 发布失败", ImportQueueConsumed: "Worker 消费消息", ImportFileParsed: "文件解析完成", ImportFileParseFailed: "文件解析失败",
+  ImportFileUploaded: "原文件已上传", QStashPublished: "QStash 入队", QStashPublishFailed: "QStash 发布失败", ImportQueueConsumed: "Worker 消费消息", ImportFileParsed: "文件解析完成", ImportFileParseFailed: "文件解析失败", ImportFileParseRecovered: "解析任务已恢复",
   ImportBatchStarted: "批次开始", ImportBatchValidated: "批量校验完成", ImportDatabaseWritten: "数据库批量写入", ImportBatchSucceeded: "批次完成", ImportBatchFailed: "批次失败", QStashDeadLettered: "消息进入 DLQ",
-  ImportTaskCompleted: "任务完成", ImportTaskPartialSuccess: "任务部分成功", ImportTaskDegraded: "SKU 校验降级", ImportBlobsDeleted: "Blob 已清理", ImportTaskCreated: "任务创建",
+  ImportTaskCompleted: "任务完成", ImportTaskPartialSuccess: "任务部分成功", ImportTaskFailed: "任务失败", ImportTaskDegraded: "SKU 校验降级", ImportBlobsDeleted: "Blob 已清理", ImportTaskCreated: "任务创建",
 };
 
 export default function TracePage({ params, searchParams }: { params: Promise<{ traceId: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {

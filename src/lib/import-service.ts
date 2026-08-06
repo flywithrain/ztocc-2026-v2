@@ -55,6 +55,9 @@ type WorkerTaskContext = {
   id: string;
   traceId: string;
   startedAt: Date | null;
+  totalBatches: number;
+  parseDurationMs: number;
+  ruleDurationMs: number;
   payload: ImportTaskPayload | null;
 };
 
@@ -63,13 +66,13 @@ const taskContextCache = new Map<string, Promise<WorkerTaskContext>>();
 function loadWorkerTaskContext(taskId: string) {
   const cached = taskContextCache.get(taskId);
   if (cached) return cached;
-  const pending = db.select({ id: importTasks.id, traceId: importTasks.traceId, startedAt: importTasks.startedAt, filePayload: importTasks.filePayload })
+  const pending = db.select({ id: importTasks.id, traceId: importTasks.traceId, startedAt: importTasks.startedAt, totalBatches: importTasks.totalBatches, parseDurationMs: importTasks.parseDurationMs, ruleDurationMs: importTasks.ruleDurationMs, filePayload: importTasks.filePayload })
     .from(importTasks)
     .where(eq(importTasks.id, taskId))
     .limit(1)
     .then(([task]) => {
       if (!task) throw new Error("导入任务不存在");
-      return { id: task.id, traceId: task.traceId, startedAt: task.startedAt, payload: task.filePayload ? decodePayload(task.filePayload) : null };
+      return { id: task.id, traceId: task.traceId, startedAt: task.startedAt, totalBatches: task.totalBatches, parseDurationMs: task.parseDurationMs, ruleDurationMs: task.ruleDurationMs, payload: task.filePayload ? decodePayload(task.filePayload) : null };
     });
   taskContextCache.set(taskId, pending);
   return pending;
@@ -168,6 +171,9 @@ export async function createBlobImportTask(input: BlobImportTaskInput) {
   };
 }
 
+/**
+ * @deprecated 仅供真实 Neon 集成测试和旧任务兼容；生产 API 明确拒绝 rows，正式链路必须使用 createBlobImportTask。
+ */
 export async function createImportTask(input: { fileName: string; parseRuleId: string; rule: ImportTaskPayload["rule"]; rows: OrderRow[] }) {
   if (input.rows.length === 0) throw new Error("解析结果为空，无法创建导入任务");
   if (input.rows.length > 50000) throw new Error("单个任务最多支持 50,000 行");
@@ -259,7 +265,14 @@ export async function dispatchOutbox(taskId?: string) {
 
   const claimToken = crypto.randomUUID();
   const events = await sql`
-    with claimable as (
+    with expired_leases as (
+      update event_outbox
+      set status = 'failed', retry_count = retry_count + 1,
+        next_retry_at = now(), last_error = 'Outbox publishing lease expired; dispatcher will retry',
+        claimed_at = null, claim_token = null, lease_expires_at = null
+      where status = 'publishing' and lease_expires_at < now()
+      returning id
+    ), claimable as (
       select id
       from event_outbox
       where status in ('pending', 'failed')
@@ -435,6 +448,9 @@ export async function processImportBatch(taskId: string, unitId: string, deliver
 
     const successfulRows = rows.filter((row) => !errorsByRow.has(row.rowIndex));
     const rowsByIndex = new Map(rows.map((row) => [row.rowIndex, row]));
+    // 文件解析与规则执行发生在批次创建前，按处理单元均摊到每条性能日志，避免阶段监控出现固定 0。
+    const batchParseDurationMs = Math.round(task.parseDurationMs / Math.max(task.totalBatches, 1));
+    const batchRuleDurationMs = Math.round(task.ruleDurationMs / Math.max(task.totalBatches, 1));
     const errorValues = validationErrors.map((error) => {
       const row = rowsByIndex.get(error.rowIndex)!;
       const meta = error.message.includes("SKU 不存在")
@@ -445,7 +461,7 @@ export async function processImportBatch(taskId: string, unitId: string, deliver
         task_id: taskId,
         unit_id: unitId,
         batch_index: batch.batch_index,
-        row_number: error.rowIndex + 1,
+        row_number: row.sourceRowNumber ?? error.rowIndex + 1,
         field_name: error.field,
         raw_value: maskSensitive(error.field, rawValue(row, error.field)),
         error_code: meta.code,
@@ -501,9 +517,9 @@ export async function processImportBatch(taskId: string, unitId: string, deliver
             ${`${unitId} 已完成数据库批量写入：${shipmentRows.length} 个运单，${orderRows.length} 条 SKU 明细`},
             ${JSON.stringify({ batch_index: batch.batch_index, shipment_count: shipmentRows.length, order_count: orderRows.length, success_rows: successfulRows.length })}::jsonb)`,
       sql`insert into batch_performance_log (id, task_id, unit_id, batch_index, parse_duration_ms, rule_duration_ms, validate_duration_ms, insert_duration_ms, total_duration_ms, status, trace_id)
-          values (gen_random_uuid(), ${taskId}, ${unitId}, ${batch.batch_index}, 0, 0, ${validateDurationMs},
+          values (gen_random_uuid(), ${taskId}, ${unitId}, ${batch.batch_index}, ${batchParseDurationMs}, ${batchRuleDurationMs}, ${validateDurationMs},
             greatest(0, extract(epoch from (clock_timestamp() - ${batchStartedAt}::timestamptz)) * 1000 - ${validateDurationMs})::int,
-            (extract(epoch from (clock_timestamp() - ${batchStartedAt}::timestamptz)) * 1000)::int, 'completed', ${task.traceId})
+            ((extract(epoch from (clock_timestamp() - ${batchStartedAt}::timestamptz)) * 1000)::int + ${batchParseDurationMs} + ${batchRuleDurationMs}), 'completed', ${task.traceId})
           on conflict (task_id, unit_id) do nothing`,
       sql`insert into trace_events (id, trace_id, task_id, unit_id, event_name, event_status, message, metadata)
           values (gen_random_uuid(), ${task.traceId}, ${taskId}, ${unitId}, 'ImportBatchSucceeded', 'success',
@@ -521,6 +537,7 @@ export async function processImportBatch(taskId: string, unitId: string, deliver
   }
 }
 
+/** @deprecated 仅供旧任务和数据库集成测试；生产消费统一由 QStash processImportEvent 驱动。 */
 export async function processPendingBatches(taskId: string) {
   await dispatchOutbox(taskId);
   const batches = await db.select({ unitId: importTaskBatches.unitId }).from(importTaskBatches).where(and(eq(importTaskBatches.taskId, taskId), inArray(importTaskBatches.status, ["pending", "failed"]))).orderBy(asc(importTaskBatches.batchIndex));
@@ -549,10 +566,12 @@ function applyEditManifest(rows: OrderRow[], manifest: ImportEditManifest | null
 }
 
 export async function processImportFile(taskId: string) {
+  const parseClaimToken = crypto.randomUUID();
   const claimed = await sql`
     update import_tasks
     set processing_stage = 'parsing', status = 'processing', started_at = coalesce(started_at, now()),
-      parse_retry_count = parse_retry_count + 1, parse_last_error = null
+      parse_retry_count = parse_retry_count + 1, parse_last_error = null,
+      parse_claim_token = ${parseClaimToken}, parse_lease_expires_at = now() + interval '3 minutes'
     where id = ${taskId} and processing_stage in ('file_uploaded', 'parse_failed')
     returning id, trace_id, file_name, file_hash, parse_rule_id, source_blob_pathname,
       edit_manifest_blob_pathname, file_mime
@@ -583,8 +602,12 @@ export async function processImportFile(taskId: string) {
     if (actualHash !== task.file_hash) throw new Error("原始文件 SHA-256 与任务声明不一致");
 
     const rule = { id: task.parse_rule_id, ...(ruleRows[0].config as Record<string, unknown>) } as ImportTaskPayload["rule"];
+    const parseStarted = nowMs();
     const parsed = await readFileBuffer(sourceBuffer, task.file_name, task.file_mime || undefined);
+    const parseDurationMs = Math.round(nowMs() - parseStarted);
+    const ruleStarted = nowMs();
     const rows = applyEditManifest(parseFile(parsed, rule), manifest);
+    const ruleDurationMs = Math.round(nowMs() - ruleStarted);
     if (rows.length === 0) throw new Error("解析结果为空，无法创建处理批次");
     if (rows.length > 50000) throw new Error("单个任务最多支持 50,000 行");
 
@@ -621,7 +644,9 @@ export async function processImportFile(taskId: string) {
     }));
 
     await sql`
-      with batch_insert as (
+      with claim_guard as (
+        select id from import_tasks where id = ${taskId} and parse_claim_token = ${parseClaimToken}
+      ), batch_insert as (
         insert into import_task_batches (
           id, task_id, unit_id, batch_index, start_row, end_row, status, payload_blob_url, payload_blob_pathname
         )
@@ -630,6 +655,7 @@ export async function processImportFile(taskId: string) {
         from jsonb_to_recordset(${JSON.stringify(storedBatches)}::jsonb)
         as x(id uuid, task_id uuid, unit_id varchar, batch_index int, start_row int, end_row int,
           status varchar, payload_blob_url text, payload_blob_pathname text)
+        cross join claim_guard
         on conflict (task_id, unit_id) do nothing
         returning id
       ), outbox_insert as (
@@ -637,25 +663,28 @@ export async function processImportFile(taskId: string) {
         select x.id, x.aggregate_id, x.event_type, x.schema_version, x.payload, x.status, x.provider, now()
         from jsonb_to_recordset(${JSON.stringify(storedOutbox)}::jsonb)
         as x(id uuid, aggregate_id uuid, event_type varchar, schema_version int, payload jsonb, status varchar, provider varchar)
+        cross join claim_guard
         on conflict (id) do nothing
         returning id
       ), task_update as (
         update import_tasks set total_rows = ${rows.length}, total_batches = ${totalBatches},
-          processing_stage = 'waiting_batches', parsed_at = now(), parse_last_error = null
-        where id = ${taskId}
+          processing_stage = 'waiting_batches', parsed_at = now(), parse_last_error = null,
+          parse_claim_token = null, parse_lease_expires_at = null,
+          parse_duration_ms = ${parseDurationMs}, rule_duration_ms = ${ruleDurationMs}
+        where id = ${taskId} and parse_claim_token = ${parseClaimToken}
         returning id
       )
       insert into trace_events (id, trace_id, task_id, event_name, event_status, message, metadata)
       select gen_random_uuid(), ${task.trace_id}, id, 'ImportFileParsed', 'success',
         ${`文件解析完成，已生成 ${totalBatches} 个 Blob 批次`},
-        ${JSON.stringify({ total_rows: rows.length, total_batches: totalBatches, batch_size: IMPORT_BATCH_SIZE })}::jsonb
+        ${JSON.stringify({ total_rows: rows.length, total_batches: totalBatches, batch_size: IMPORT_BATCH_SIZE, parse_duration_ms: parseDurationMs, rule_duration_ms: ruleDurationMs })}::jsonb
       from task_update
     `;
     return { idempotent: false, task_id: taskId, total_rows: rows.length, total_batches: totalBatches };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await sql.transaction([
-      sql`update import_tasks set processing_stage = 'parse_failed', status = 'pending', parse_last_error = ${message} where id = ${taskId}`,
+      sql`update import_tasks set processing_stage = 'parse_failed', status = 'pending', parse_last_error = ${message}, parse_claim_token = null, parse_lease_expires_at = null where id = ${taskId} and parse_claim_token = ${parseClaimToken}`,
       sql`insert into trace_events (id, trace_id, task_id, event_name, event_status, message) values (gen_random_uuid(), ${task.trace_id}, ${taskId}, 'ImportFileParseFailed', 'failed', ${message})`,
     ]);
     throw error;
@@ -715,11 +744,40 @@ export async function finalizeTask(taskId: string) {
     )
     insert into trace_events (id, trace_id, task_id, event_name, event_status, message)
     select gen_random_uuid(), trace_id, id,
-      case when status = 'partial_success' then 'ImportTaskPartialSuccess' else 'ImportTaskCompleted' end,
+      case when status = 'partial_success' then 'ImportTaskPartialSuccess' when status = 'failed' then 'ImportTaskFailed' else 'ImportTaskCompleted' end,
       case when status = 'failed' then 'failed' else 'success' end,
       '任务结束：成功 ' || success_rows || ' 行，失败 ' || failed_rows || ' 行'
     from finished
   `;
+}
+
+export async function recoverStalledParses() {
+  const stalled = await sql`
+    with recovered as (
+      update import_tasks
+      set processing_stage = 'parse_failed', status = 'pending',
+        parse_last_error = '文件解析 Worker 租约过期，恢复控制面将重新投递',
+        parse_claim_token = null, parse_lease_expires_at = null
+      where processing_stage = 'parsing'
+        and parse_lease_expires_at is not null
+        and parse_lease_expires_at < now()
+      returning id, trace_id
+    ), outbox_reset as (
+      update event_outbox o
+      set status = 'failed', next_retry_at = now(),
+        last_error = '文件解析 Worker 租约过期，恢复控制面重新投递',
+        claimed_at = null, claim_token = null, lease_expires_at = null
+      from recovered r
+      where o.aggregate_id = r.id and o.event_type = 'ImportFileUploaded'
+      returning o.aggregate_id
+    )
+    insert into trace_events (id, trace_id, task_id, event_name, event_status, message)
+    select gen_random_uuid(), r.trace_id, r.id, 'ImportFileParseRecovered', 'warning',
+      '文件解析 Worker 租约过期，任务已恢复为可重试状态'
+    from recovered r
+    returning task_id
+  ` as unknown as Array<{ task_id: string }>;
+  return stalled;
 }
 
 export async function recoverStalledBatches() {
@@ -745,9 +803,12 @@ export async function recoverStalledBatches() {
 }
 
 export async function runImportRecovery() {
-  const stalled = await recoverStalledBatches();
+  const [stalledParses, stalledBatches] = await Promise.all([
+    recoverStalledParses(),
+    recoverStalledBatches(),
+  ]);
   const dispatched = await dispatchOutbox();
-  return { recovered_batches: stalled.length, dispatched_events: dispatched };
+  return { recovered_parses: stalledParses.length, recovered_batches: stalledBatches.length, dispatched_events: dispatched };
 }
 
 export async function cleanupExpiredImportBlobs(limit = 25) {
@@ -844,11 +905,17 @@ export async function recordQStashFailure(input: {
 
   const payload = record.payload.payload as { unit_id?: string };
   if (record.event_type === "ImportBatchCreated" && payload.unit_id) {
-    await db.update(importTaskBatches).set({
-      status: "failed",
-      deadLetteredAt: new Date(),
-      lastError: `QStash 重试耗尽：${input.sourceMessageId}`,
-    }).where(and(eq(importTaskBatches.taskId, record.aggregate_id), eq(importTaskBatches.unitId, payload.unit_id)));
+    await sql.transaction([
+      sql`update import_task_batches set status = 'failed', dead_lettered_at = now(),
+          last_error = ${`QStash 重试耗尽：${input.sourceMessageId}`}
+        where task_id = ${record.aggregate_id} and unit_id = ${payload.unit_id}`,
+      sql`update import_tasks set status = 'failed', processing_stage = 'dead_lettered',
+          completed_at = now(), parse_last_error = ${`批次 ${payload.unit_id} QStash 重试耗尽：${input.sourceMessageId}`}
+        where id = ${record.aggregate_id} and status not in ('completed', 'partial_success', 'failed')`,
+      sql`insert into trace_events (id, trace_id, task_id, unit_id, event_name, event_status, message)
+        select gen_random_uuid(), trace_id, id, ${payload.unit_id}, 'ImportTaskFailed', 'failed',
+          ${`任务因批次 ${payload.unit_id} 进入 DLQ，已标记失败`} from import_tasks where id = ${record.aggregate_id}`,
+    ]);
   } else if (record.event_type === "ImportFileUploaded") {
     await db.update(importTasks).set({
       status: "failed",

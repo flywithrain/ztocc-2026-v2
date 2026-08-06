@@ -1,78 +1,111 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides repository-specific guidance for AI coding and static review.
 
 @AGENTS.md
 
-> ⚠️ Per AGENTS.md: this is Next.js **16.2.6** with breaking changes vs. older versions. Read the relevant guide in `node_modules/next/dist/docs/` before writing framework code, and heed deprecation notices.
+> This project uses Next.js 16.2.6. Read the matching framework documentation before changing App Router or Route Handler code.
 
-## What this is
+## Project scope
 
-"万能导入 V2" (Universal Import V2) — an intelligent multi-format batch order-import system. A user uploads an arbitrary Excel/PDF outbound-shipping document, picks (or AI-generates) a **parse rule**, the file is parsed into normalized order rows, validated, previewed/edited, then submitted to the database.
+“万能导入 V2” is a Next.js App Router + TypeScript import system. The production order-import path has been refactored to an asynchronous event-driven architecture for Vercel:
+
+```text
+Browser → Vercel Private Blob Client Upload
+        → POST /api/import-tasks (Blob references only; full rows are rejected)
+        → Neon PostgreSQL import_tasks + Transactional Outbox
+        → Upstash QStash Direct Publish
+        → /api/internal/import-events Worker
+        → reuse V2 parse-engine.ts
+        → Private Blob batch payloads
+        → batch SKU validation + bulk database writes
+        → task/error/performance/trace aggregation
+```
+
+The browser still performs V2 preview parsing and editing for user confirmation. That preview is not the production persistence path. Final submission creates an asynchronous task and redirects to `/import-tasks/:taskId`.
 
 ## Commands
 
 ```bash
-npm run dev          # Next.js dev server
-npm run build        # production build (also Vercel build command)
-npm run lint         # eslint (flat config, eslint.config.mjs)
-
-npm run db:generate  # drizzle-kit: generate SQL migrations from db-schema.ts
-npm run db:push      # push schema to the Neon Postgres DB
-npm run db:seed      # run scripts/seed.ts → seedDemoRules() (writes built-in rules)
-npm run db:studio    # drizzle-kit studio
+npm ci
+npm run dev
+npm run test:async-import
+npm run test:async-import:integration  # requires RUN_NEON_INTEGRATION_TEST=true
+npm run lint
+npm run typecheck
+npm run db:check
+npm run db:generate
+npm run db:migrate
+npm run build
+npm run db:seed
+npm run db:seed-load
+npm run load:test
 ```
 
-There is no test runner configured. To verify parsing behavior, use the sample files in `demos/` through the dev server.
+Do not add database migration or seed commands to the Vercel Build Command.
 
-### Environment (`.env.local`, not committed)
+## Production modules
 
-- `DATABASE_URL` — Neon Postgres connection string (required by db, drizzle.config.ts).
-- `DEEPSEEK_API_KEY` — required for AI rule generation.
-- `DEEPSEEK_API_URL` — defaults to DeepSeek; a StepFun-compatible URL also works (see ai-client.ts branching on `deepseek.com`).
-- `DEEPSEEK_MODEL` — defaults to `deepseek-chat`.
+- File upload: `src/app/api/import-files/upload/route.ts`, `src/lib/blob-storage.ts`
+- Task creation: `src/app/api/import-tasks/route.ts`, `createBlobImportTask()`
+- Transactional Outbox / recovery: `dispatchOutbox()`, `runImportRecovery()`
+- QStash publisher and receiver: `src/lib/qstash-publisher.ts`, `src/lib/qstash-receiver.ts`
+- Worker consumer: `src/app/api/internal/import-events/route.ts`, `processImportEvent()`
+- V2 parse rule engine: `src/lib/parse-engine.ts`
+- Batch validation and bulk writes: `processImportBatch()`
+- Task UI: `/import-tasks/:taskId`
+- Monitoring: `/import-monitor`, `/api/import-monitor/summary`
+- Trace search: `/traces`, `/traces/:traceId`, `/api/traces/*`
+- Cleanup: `/api/internal/import-cleanup`
 
-## Architecture
+`createImportTask()` and `processPendingBatches()` are deprecated compatibility/integration-test helpers. They may carry a compressed `rows` payload for old tests. They are not reachable from the production task API; `parseBlobImportTaskRequest()` explicitly rejects `rows`.
 
-### Pipeline (the big picture)
+## Database
 
-`upload → select/generate rule → parse → validate → preview/edit → submit`
+Schema is in `src/lib/db-schema.ts`, managed with Drizzle ORM over Neon PostgreSQL. Core tables include:
 
-Steps are driven from `src/app/page.tsx` and connected pages. **File reading and parsing run in the browser**, not the server — data is handed between pages via `sessionStorage` (keys: `previewData`, `newRuleFile`). Only DB access and AI calls cross to the server.
+- `parse_rules`
+- `shipments`, `orders`
+- `sku_master`
+- `import_tasks`, `import_task_batches`, `import_task_errors`
+- `event_outbox`
+- `batch_performance_log`
+- `trace_events`
 
-- **File reading** (`src/lib/file-reader.ts`): `readFile()` dispatches by extension. Excel via `xlsx` (every cell stringified, blank rows dropped); PDF via `pdfjs-dist` (reconstructs lines by Y-coordinate; worker loaded from a CDN URL). Output is a `ParsedFile` of `RawRow[]` (`{ rowNum, cells }`). Multi-sheet workbooks populate `sheets`.
-- **Parse engine** (`src/lib/parse-engine.ts`): the core. `parseFile(file, rule)` turns raw rows into `OrderRow[]` per the rule's `parseMode`. See the modes below.
-- **Validation** (`src/lib/validators.ts`): `validateOrders` (A-group `storeName` OR B-group `receiverName`+`receiverPhone`+`receiverAddress` required; `skuCode`/`skuName`/positive `skuQuantity` required; CN phone regex) and `checkExternalCodeDuplicates` (in-batch + against existing DB codes).
-- **Persistence** (`src/lib/server-actions.ts`, `"use server"`): rule CRUD + `submitOrders(rows, batchId)` + paginated/filtered `getOrdersPage`. `getExistingExternalCodes` feeds dedup.
+Do not describe this repository as a two-table synchronous application.
 
-### Parse modes (`ParseMode` in `src/types/index.ts`)
+## Reliability requirements
 
-A rule (`ParseRule`) selects one mode; the engine has a dedicated function per mode:
+When changing the import path, preserve these invariants:
 
-- **standard** — row-per-record table. `excel.dataStartRow/footerRows/skipRows/skipIfFirstColContains` bound the data region; `fieldMappings` map column index → field.
-- **aggregate** — multiple rows under one code sharing header fields.
-- **matrix** — store×SKU grid: `matrix.fixedColMappings` read SKU columns; store names come from `storeHeaderRow` across `storeStartCol..storeEndCol`; one `OrderRow` per nonzero quantity cell.
-- **card** — card-style layout with a `boundaryPattern` regex resetting per-card meta; `cardMetaMappings` scan KV labels, `dataFieldMappings` read the item rows.
-- **multi-sheet** — each sheet parsed independently (as standard) and concatenated.
+- Task + Outbox are created atomically.
+- Outbox publishing leases and file-parse leases are recoverable.
+- QStash retries and failure callback remain enabled and signed.
+- A completed batch cannot be claimed again.
+- A DLQ batch must put its task into a terminal failed state.
+- SKU validation and persistence remain batch operations; no per-row database query or insert loop.
+- `trace_id` must remain available across API, Outbox, QStash, Worker, errors and performance logs.
+- `OrderRow.sourceRowNumber` is the original 1-based physical file row; `rowIndex` is the stable normalized sequence used for idempotency.
+- Phone/address values must be masked before storing them in `import_task_errors`.
 
-Cross-cutting: **KV extraction** (`kvExtract`) scans label cells (e.g. `收货人：`) and takes the value in the adjacent column, for header/footer metadata not in the table grid. Row offsets are positive-from-`dataStartRow` or negative-from-end.
+## Environment
 
-`OrderRow` is the canonical normalized shape (10 business fields + `id`/`rowIndex`/`_errors`). Field resolution generally prefers mapped value → rule `defaults` → KV value.
+Use `.env.example` as the variable contract. Production requires at least:
 
-### Rules are data, generated by AI
+- `DATABASE_URL`
+- `APP_BASE_URL`
+- `BLOB_READ_WRITE_TOKEN`
+- `QSTASH_TOKEN`
+- `QSTASH_CURRENT_SIGNING_KEY`
+- `QSTASH_NEXT_SIGNING_KEY`
 
-A `ParseRule` is persisted as a JSONB `config` blob in `parse_rules` (only `name`/`description` are real columns — see `src/lib/db-schema.ts`). `getRule`/`getAllRules` spread `config` back over the row.
+Never commit `.env.local` or real credentials.
 
-- **AI generation** (`src/lib/ai-client.ts` via `POST /api/ai/analyze`): sends a sampled prompt (first ~50 rows + last 10) to a DeepSeek/StepFun-compatible chat API and expects a strict JSON `AiRuleResponse`. `extractJson` is defensive — it strips ```` ```json ```` fences and falls back to first-`{`…last-`}`. The system prompt enumerates the allowed `toField` names and mode semantics; keep it in sync with `src/types/index.ts` and the parse engine when changing the schema.
-- **Built-in rules**: `src/lib/seed-rules.ts`, seeded via `npm run db:seed` or `POST /api/rules/seed`.
+## Submission evidence
 
-### Database
+- Architecture assumptions: `REFACTORING_ASSUMPTIONS.md`
+- Deployment and post-deploy checks: `DEPLOYMENT_GUIDE.md`
+- Load-test evidence and limitations: `LOAD_TEST_REPORT.md`
+- Exam checklist: `EXAM_ACCEPTANCE_REPORT.md`
 
-Drizzle ORM over **Neon serverless HTTP** (`src/lib/db.ts`, `drizzle-orm/neon-http`). Two tables: `parse_rules` and `orders` (orders carry a `batchId` per submission). Schema lives in `src/lib/db-schema.ts`; `drizzle.config.ts` loads `.env.local` via dotenv.
-
-### Conventions
-
-- Path alias `@/*` → `src/*`.
-- UI: Tailwind v4 (`@tailwindcss/postcss`), `lucide-react` icons, a teal accent (`#0fc6c2`). Shared primitives in `src/components/shared/`; `cn()` (clsx + tailwind-merge) in `src/lib/utils.ts`.
-- Code, comments, and UI copy are in Chinese — match that.
-- Deploy target is Vercel (`vercel.json`, region `hkg1`); `next.config.ts` marks `pdfjs-dist` as a server-external package, opens CORS on `/api/*`, and raises the Server Action body limit to 10mb.
+Do not present the historical Neon database-core baseline as proof of the final Vercel + Blob + QStash end-to-end result. Formal acceptance still uses the deployed URL and the post-deploy load-test workflow.
