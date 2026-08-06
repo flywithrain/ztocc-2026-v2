@@ -56,7 +56,7 @@
 - ESLint：通过（0 error，保留 8 个非阻断 warning）。
 - TypeScript：通过。
 - Drizzle schema check：通过。
-- Next.js 16.2.6 生产构建：通过；编译、TypeScript、20 个静态页面生成及全部动态 Route 收集成功。
+- Next.js 16.2.6 生产构建：通过；编译、TypeScript、24 个静态页面生成及全部动态 Route 收集成功。
 - 真实 Neon 消费核心集成测试：15 项断言通过。
 - 集成测试信号：1 条 E001、3 个关键 Trace、1 条性能日志、delivery_attempt=1；重复投递不改写数据。
 - 既有 10,000 行真实 Neon 数据库处理基线：56.798 秒，11,536 行/分钟，达到 ≤60 秒目标。
@@ -66,12 +66,13 @@
 ## 6. 模块九 Trace 检索验收
 
 - 独立入口：顶部导航 `Trace 检索` → `/traces`。
-- Trace ID 获取入口：监控页“最近导入任务”直接展示每条记录的完整 `task_id` 和 `trace_id`，并提供“任务详情”“Trace 链路”双入口，运维不需要预先复制或猜测 trace_id。
+- Trace ID 获取入口：独立 `/import-history` 导入历史表和监控页“最近导入任务”都展示完整 `task_id`、`trace_id`，并提供“任务详情”“Trace 链路”双入口，运维不需要预先复制或猜测 trace_id。
 - 六类搜索条件：`task_id`、`trace_id`、文件名、批次号、行号范围、错误码；支持组合查询。
 - 详情聚合：`/api/traces/[traceId]` 返回 `import_tasks`、解析规则、原文件/兼容载荷引用、Trace 事件、Outbox、QStash message/delivery、批次、性能日志、行级错误和 DB 写入计数。
 - 时间线按 API → Blob → Outbox → Queue/Worker → DB 分阶段展示；新任务显式写入 API 接收、ID 生成、文件引用保存、行数预扫描、任务记录创建、队列消费、批量校验和数据库写入事件。
 - 失败节点可展开批次号、行号、字段、脱敏原值、错误码、原因、所属规则、阶段耗时、批次重试、QStash delivery/message ID 与修复建议。
 - 真实 Neon 历史任务验收：按 task_id 命中 1 个任务、23 个 Trace 事件、11 条 Outbox、104 条错误；按文件名 + E001 命中 104 条；按批次 1 + 行号 1～100 命中 2 条；详情聚合 10 个批次、10 条性能日志、5,000 运单与 9,896 条 SKU 明细。
+- 独立导入历史验收：`/api/import-history` 返回 2 条真实历史任务，支持文件名 + 状态组合筛选；页面显示完整 task_id/trace_id，任务详情和 Trace 链路按钮均可用。
 
 ## 7. 本地生产模式烟测
 

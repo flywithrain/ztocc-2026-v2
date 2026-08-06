@@ -18,7 +18,8 @@ Browser → Private Blob Client Upload
 
 - `/`：上传原文件、规则解析、预览。
 - `/import-tasks/:taskId`：2 秒刷新进度、错误筛选/导出、降级和 Trace。
-- `/import-monitor`：QStash/Outbox/DLQ、队列等待、活跃 Worker、吞吐与 P50/P95/P99；最近导入任务直接展示 task_id、trace_id，并提供任务详情/Trace 链路入口。
+- `/import-monitor`：QStash/Outbox/DLQ、队列等待、活跃 Worker、吞吐与 P50/P95/P99；保留最近任务摘要。
+- `/import-history`：独立导入历史表，支持文件名、task_id、trace_id、状态筛选和分页，展示完整 ID 并提供任务详情/Trace 链路入口。
 - `/traces`：按 task_id、trace_id、文件名、批次、行号范围、错误码组合检索。
 - `/traces/:traceId`：聚合 API、Blob、Outbox、QStash、Worker、DB、性能日志和行级错误的全链路时间线。
 - `POST /api/import-files/upload`：Vercel Blob Client Upload token。
