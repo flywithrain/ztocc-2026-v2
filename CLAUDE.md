@@ -103,9 +103,11 @@ Never commit `.env.local` or real credentials.
 
 ## Submission evidence
 
-- Architecture assumptions: `docs/exam-delivery/REFACTORING_ASSUMPTIONS.md`
-- Deployment and post-deploy checks: `docs/exam-delivery/DEPLOYMENT_GUIDE.md`
-- Load-test evidence and limitations: `docs/exam-delivery/LOAD_TEST_REPORT.md`
-- Exam checklist: `docs/exam-delivery/EXAM_ACCEPTANCE_REPORT.md`
+- Architecture assumptions: `docs/PROJECT_DELIVERY.md`
+- Deployment and post-deploy checks: `docs/DEPLOYMENT_GUIDE.md`
+- Load-test evidence and limitations: `docs/LOAD_TEST_REPORT.md`
+- Exam checklist: `docs/EXAM_ACCEPTANCE_REPORT.md`
+
+Load-test evidence is the 2026-08-07 real online run recorded in `docs/LOAD_TEST_REPORT.md` (10,000 rows in 30.046s).
 
 Do not present the historical Neon database-core baseline as proof of the final Vercel + Blob + QStash end-to-end result. Formal acceptance still uses the deployed URL and the post-deploy load-test workflow.

@@ -29,7 +29,7 @@
 | 8. 监控看板 | 已完成 | queue wait、active workers、Outbox pending/failed、QStash published、DLQ、P50/P95/P99 |
 | 9. Trace 检索 | 已完成 | 独立 `/traces` 检索页支持 task_id、trace_id、文件名、批次号、行号范围、错误码；详情聚合 API、Outbox、QStash Queue、Worker、DB、性能和失败行 |
 | 10. 容灾降级 | 已完成 | SKU 超时降级、QStash retry/DLQ、Outbox 恢复、卡死批次恢复 |
-| 11. 假设说明 | 已完成 | `docs/exam-delivery/REFACTORING_ASSUMPTIONS.md` 已同步当前 QStash + Blob 架构 |
+| 11. 假设说明 | 已完成 | `docs/PROJECT_DELIVERY.md` 已同步当前 QStash + Blob 架构 |
 
 ## 3. 队列与对象存储静态证据
 
@@ -84,7 +84,7 @@
 - `/api/import-tasks` 发送完整 `rows`：400。
 - `/api/internal/import-cleanup` 未授权：401。
 - 浏览器控制台：无 error。
-- 截图证据：`docs/exam-delivery/evidence/monitor-production-smoke.png`。
+- 截图证据：`docs/evidence/monitor-production-smoke.png`。
 
 本地 `.env.local` 仅配置 Neon，因此监控页按设计显示 QStash 未配置和历史积压告警；这不是生产链路通过证据，正式环境配置 QStash/Blob 后仍需复验健康状态。
 
@@ -106,9 +106,9 @@
 | 20,000 SKU 脚本 | `scripts/seed-data.ts` |
 | 10,000 行 Excel | `test-data/10000-orders-fixed.xlsx` |
 | 正式链路压测脚本 | `scripts/load-test.ts` |
-| 压测报告 | `docs/exam-delivery/LOAD_TEST_REPORT.md`；已有真实 Neon 核心基线，最新线上 QStash 全链路指标仍需回填 |
-| 架构/假设说明 | `docs/exam-delivery/REFACTORING_ASSUMPTIONS.md`；总 README 也包含流程图、Outbox、Queue/Worker 与批量策略 |
-| 部署手册 | `docs/exam-delivery/DEPLOYMENT_GUIDE.md` |
+| 压测报告 | `docs/LOAD_TEST_REPORT.md`；2026-08-07 线上实测 10,000 行 30.046s、任务创建 P95 ≈ 900ms |
+| 架构/假设说明 | `docs/PROJECT_DELIVERY.md`；总 README 也包含流程图、Outbox、Queue/Worker 与批量策略 |
+| 部署手册 | `docs/DEPLOYMENT_GUIDE.md` |
 | 接口/运行说明 | 根目录 `README.md` 已汇总上传、任务、错误、Trace、监控、启动、环境、部署和故障模拟 |
 | 演示访问说明 | `README.md` 已列出导入、历史、监控、Trace 页面；无需演示账号 |
 

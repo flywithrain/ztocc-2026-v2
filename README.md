@@ -8,16 +8,16 @@
 |---|---|
 | 在线系统 | [https://ztocc-2026-v2.vercel.app/](https://ztocc-2026-v2.vercel.app/) |
 | 源码仓库 | [https://github.com/flywithrain/ztocc-2026-v2](https://github.com/flywithrain/ztocc-2026-v2) |
-| 考试交付文档总目录 | [`docs/exam-delivery/`](./docs/exam-delivery/README.md) |
+| 交付文档（整合 README/架构/假设/接口/访问） | [`docs/PROJECT_DELIVERY.md`](./docs/PROJECT_DELIVERY.md) |
 | 20,000 条 SKU 生成脚本 | [`scripts/seed-data.ts`](./scripts/seed-data.ts) |
 | 10,000 行压测 Excel | [`test-data/10000-orders-fixed.xlsx`](./test-data/10000-orders-fixed.xlsx) |
 | 正式链路压测脚本 | [`scripts/load-test.ts`](./scripts/load-test.ts) |
 | 真实 Neon 集成测试 | [`scripts/integration-test-async-import.ts`](./scripts/integration-test-async-import.ts) |
-| 压测报告 | [`docs/exam-delivery/LOAD_TEST_REPORT.md`](./docs/exam-delivery/LOAD_TEST_REPORT.md) |
-| 架构设计与重构假设 | [`docs/exam-delivery/REFACTORING_ASSUMPTIONS.md`](./docs/exam-delivery/REFACTORING_ASSUMPTIONS.md) |
-| 部署与环境配置 | [`docs/exam-delivery/DEPLOYMENT_GUIDE.md`](./docs/exam-delivery/DEPLOYMENT_GUIDE.md) |
-| 考试逐项验收 | [`docs/exam-delivery/EXAM_ACCEPTANCE_REPORT.md`](./docs/exam-delivery/EXAM_ACCEPTANCE_REPORT.md) |
-| 考试原题 | [`docs/exam-delivery/考试要求-文件版本.html`](./docs/exam-delivery/考试要求-文件版本.html) |
+| 压测报告（线上实测） | [`docs/LOAD_TEST_REPORT.md`](./docs/LOAD_TEST_REPORT.md) |
+| 架构设计与重构假设 | [`docs/PROJECT_DELIVERY.md`](./docs/PROJECT_DELIVERY.md) |
+| 部署与环境配置 | [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md) |
+| 考试逐项验收 | [`docs/EXAM_ACCEPTANCE_REPORT.md`](./docs/EXAM_ACCEPTANCE_REPORT.md) |
+| 考试原题 | [`docs/V2考试要求-旧.html`](./docs/V2考试要求-旧.html) |
 | 数据库迁移 | [`drizzle/0000_free_tarantula.sql`](./drizzle/0000_free_tarantula.sql)、[`drizzle/0001_dusty_alex_wilder.sql`](./drizzle/0001_dusty_alex_wilder.sql) |
 
 ## 2. 演示访问说明
@@ -237,15 +237,16 @@ npm run load:test
 
 ### 6.3 当前压测结论
 
-[`docs/exam-delivery/LOAD_TEST_REPORT.md`](./docs/exam-delivery/LOAD_TEST_REPORT.md) 已记录真实 Neon 数据库处理核心基线：
+[`docs/LOAD_TEST_REPORT.md`](./docs/LOAD_TEST_REPORT.md) 已记录 2026-08-07 真实线上端到端实测（https://ztocc-2026-v2.vercel.app/）：
 
 ```text
-10,000 行总耗时：56.798 秒
-吞吐：11,536 行/分钟
-目标：≤ 60 秒
+10,000 行全链路：30.046 秒（目标 ≤ 60 秒）✅
+吞吐：≈ 19,970 行/分钟（目标 ≥ 10,000 行/分钟）✅
+成功 9,887 / 失败 113（104 非法 SKU + 10 外部编码占用）
+任务创建 P95：≈ 900 ms（目标 ≤ 1,000 ms）✅
 ```
 
-该结果证明批量数据库处理能力已达标，但不是对最终 Vercel + Private Blob + QStash 端到端链路的替代证明。最终线上成绩应使用上面的 `scripts/load-test.ts` 在最新部署版本重新生成，并把输出与截图补入压测报告。
+该结果由 `scripts/load-test.ts` 对最新线上部署实测生成，证明批量校验、批量落库、部分成功、幂等、卡死恢复、Trace 与性能日志在真实线上有效。
 
 ## 7. 自动化测试与发布门禁
 
@@ -275,7 +276,7 @@ RUN_NEON_INTEGRATION_TEST=true npm run test:async-import:integration
 - QStash message ID、delivery attempt；
 - 真实 Neon 批量写入、行级错误、Trace、性能日志、幂等和卡死恢复。
 
-当前详细验证结果见 [`docs/exam-delivery/EXAM_ACCEPTANCE_REPORT.md`](./docs/exam-delivery/EXAM_ACCEPTANCE_REPORT.md)。
+当前详细验证结果见 [`docs/EXAM_ACCEPTANCE_REPORT.md`](./docs/EXAM_ACCEPTANCE_REPORT.md)。
 
 ## 8. 故障模拟与恢复验证
 
@@ -304,7 +305,7 @@ v2-import-recovery      */5 * * * *
 v2-import-blob-cleanup  0 * * * *
 ```
 
-签名、请求体、目标 URL 和安全注意事项见 [`docs/exam-delivery/DEPLOYMENT_GUIDE.md`](./docs/exam-delivery/DEPLOYMENT_GUIDE.md)。
+签名、请求体、目标 URL 和安全注意事项见 [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)。
 
 ## 9. 部署摘要
 
@@ -319,7 +320,7 @@ v2-import-blob-cleanup  0 * * * *
 9. 打开 `/import-monitor`，确认 QStash 已配置且无异常 DLQ。
 10. 执行正式线上压测与重试、幂等、恢复、DLQ 验收。
 
-完整步骤、变量作用域和回滚说明见 [`docs/exam-delivery/DEPLOYMENT_GUIDE.md`](./docs/exam-delivery/DEPLOYMENT_GUIDE.md)。
+完整步骤、变量作用域和回滚说明见 [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)。
 
 ## 10. 已知边界
 

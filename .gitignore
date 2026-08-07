@@ -52,7 +52,7 @@ next-env.d.ts
 /test-data/*
 !/test-data/10000-orders-fixed.xlsx
 
-# 本地 HTTP/浏览器烟测过程文件；正式证据统一放 docs/exam-delivery/evidence
+# 本地 HTTP/浏览器烟测过程文件；正式证据统一放 docs/evidence
 /*.check.html
 /*-check.html
 /.*-check.html
