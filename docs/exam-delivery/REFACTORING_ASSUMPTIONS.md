@@ -6,7 +6,7 @@
 ## 2. 处理单元与容量规划
 默认 `IMPORT_BATCH_SIZE=1000`，10,000 行拆为 10 个独立处理单元；`IMPORT_WORKER_CONCURRENCY=4`。每个处理单元对最多 1,000 个 SKU 做一次 `IN` 批量查询，并把错误、运单主表、SKU 明细、批次计数、性能日志和 Trace 合并到单次 Neon HTTP 事务中提交。
 
-真实 Neon 压测发现：多个 Worker 直接原子累加同一 `import_tasks` 行会产生热点锁竞争，首波 4 批事务耗时达到 46～49 秒。最终方案将处理结果先写入各自 `import_task_batches`，所有批次结束后一次聚合主任务，移除热点行竞争。2026-08-04 实测 10,000 行总耗时 56.798 秒、吞吐 11,536 行/分钟，达到 60 秒目标；详细结果见 `LOAD_TEST_REPORT.md`。
+真实 Neon 压测发现：多个 Worker 直接原子累加同一 `import_tasks` 行会产生热点锁竞争，首波 4 批事务耗时达到 46～49 秒。最终方案将处理结果先写入各自 `import_task_batches`，所有批次结束后一次聚合主任务，移除热点行竞争。2026-08-04 实测 10,000 行总耗时 56.798 秒、吞吐 11,536 行/分钟，达到 60 秒目标；详细结果见同目录 `LOAD_TEST_REPORT.md`。
 
 ## 3. Outbox 与专业队列可靠性
 任务与 `ImportFileUploaded`、批次与 `ImportBatchCreated` 分别在 Neon 事务中原子提交，避免业务状态存在但事件丢失。Dispatcher 使用 `FOR UPDATE SKIP LOCKED`、30 秒 lease 和 claim token 认领 `pending/failed` Outbox，调用 `@upstash/qstash` 的 `Client.publishJSON()` Direct Publish。发布参数固定包含 retries、retry delay、failure callback、内容去重和 Flow Control 并发 4；provider message ID 与响应摘要回写 Outbox。QStash 消费路由用 `Receiver.verify()` 校验 current/next signing key，最终失败回调同步 `dead-lettered` 状态。正式主链路不再把 PostgreSQL 任务表伪装为外部消息队列，也不再使用旧 `IMPORT_QUEUE_WEBHOOK_URL`。

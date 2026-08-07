@@ -1,12 +1,12 @@
 # V4.0 考试要求逐项验收报告
 
-验收时间：2026-08-06。结论依据当前源码、自动化测试、真实 Neon 集成测试、生产构建、本地生产模式浏览器烟测和既有 10,000 行 Neon 压测；不虚构尚未完成的 Vercel 线上数据。
+验收时间：2026-08-07。结论依据当前源码、自动化测试、真实 Neon 集成测试、生产构建、本地生产模式浏览器烟测、已提供的 Vercel/GitHub 地址和既有 10,000 行 Neon 压测；不把数据库核心基线冒充为最新 Vercel + Blob + QStash 线上全链路数据。
 
 ## 1. 前置红线
 
 | 红线 | 状态 | 当前证据/剩余项 |
 |---|---|---|
-| 在线可访问系统 | 待部署 | 尚未提供 Vercel 正式 URL，是最终提交阻断项 |
+| 在线可访问系统 | 已提供 | `https://ztocc-2026-v2.vercel.app/`；提交前仍需确认最新部署版本包含当前工作树修改 |
 | 20,000 SKU 脚本 | 已完成 | `scripts/seed-data.ts`；真实 Neon 已确认 20,000 条 |
 | 10,000 行 Excel | 已完成 | `test-data/10000-orders-fixed.xlsx`；10,000 行、104 个非法 SKU |
 | 不同步逐行 INSERT | 已完成 | QStash Worker、1,000 行批次、`jsonb_to_recordset` 批量写库、单批事务 |
@@ -29,7 +29,7 @@
 | 8. 监控看板 | 已完成 | queue wait、active workers、Outbox pending/failed、QStash published、DLQ、P50/P95/P99 |
 | 9. Trace 检索 | 已完成 | 独立 `/traces` 检索页支持 task_id、trace_id、文件名、批次号、行号范围、错误码；详情聚合 API、Outbox、QStash Queue、Worker、DB、性能和失败行 |
 | 10. 容灾降级 | 已完成 | SKU 超时降级、QStash retry/DLQ、Outbox 恢复、卡死批次恢复 |
-| 11. 假设说明 | 已完成 | `REFACTORING_ASSUMPTIONS.md` 已同步当前 QStash + Blob 架构 |
+| 11. 假设说明 | 已完成 | `docs/exam-delivery/REFACTORING_ASSUMPTIONS.md` 已同步当前 QStash + Blob 架构 |
 
 ## 3. 队列与对象存储静态证据
 
@@ -84,7 +84,7 @@
 - `/api/import-tasks` 发送完整 `rows`：400。
 - `/api/internal/import-cleanup` 未授权：401。
 - 浏览器控制台：无 error。
-- 截图证据：`monitor-production-smoke.png`。
+- 截图证据：`docs/exam-delivery/evidence/monitor-production-smoke.png`。
 
 本地 `.env.local` 仅配置 Neon，因此监控页按设计显示 QStash 未配置和历史积压告警；这不是生产链路通过证据，正式环境配置 QStash/Blob 后仍需复验健康状态。
 
@@ -101,18 +101,19 @@
 
 | 提交物 | 状态 |
 |---|---|
-| Vercel URL | 缺失，等待用户部署 |
-| 源码仓库 URL | 缺失，由用户提交 |
-| 20,000 SKU 脚本 | 已有 |
-| 10,000 行 Excel | 已有 |
-| 压测报告 | 已有真实 Neon 基线；待补正式线上数据与截图 |
-| 架构/假设说明 | 已有 `REFACTORING_ASSUMPTIONS.md` 与部署手册 |
-| 部署手册 | 已有 `DEPLOYMENT_GUIDE.md` |
-| 接口/运行说明 | 部署手册已有关键 Route 和配置；可按提交模板补截图 |
-| 演示访问说明 | 待正式 URL 和 Deployment Protection 状态 |
+| Vercel URL | 已提供：`https://ztocc-2026-v2.vercel.app/` |
+| 源码仓库 URL | 已提供：`https://github.com/flywithrain/ztocc-2026-v2` |
+| 20,000 SKU 脚本 | `scripts/seed-data.ts` |
+| 10,000 行 Excel | `test-data/10000-orders-fixed.xlsx` |
+| 正式链路压测脚本 | `scripts/load-test.ts` |
+| 压测报告 | `docs/exam-delivery/LOAD_TEST_REPORT.md`；已有真实 Neon 核心基线，最新线上 QStash 全链路指标仍需回填 |
+| 架构/假设说明 | `docs/exam-delivery/REFACTORING_ASSUMPTIONS.md`；总 README 也包含流程图、Outbox、Queue/Worker 与批量策略 |
+| 部署手册 | `docs/exam-delivery/DEPLOYMENT_GUIDE.md` |
+| 接口/运行说明 | 根目录 `README.md` 已汇总上传、任务、错误、Trace、监控、启动、环境、部署和故障模拟 |
+| 演示访问说明 | `README.md` 已列出导入、历史、监控、Trace 页面；无需演示账号 |
 
 ## 10. 最终待办与结论
 
 本地代码侧 P0 已补齐：专业队列、官方验签、重试、失败回调、DLQ、Transactional Outbox、Private Blob 直传、轻量任务 API、异步原文件解析、批次 Blob、恢复、监控和 24 小时清理。
 
-目前不能宣称“考试全部通过”，唯一主要阻断面是正式部署后的真实环境证据。用户部署后需完成：20 次任务创建 P95 ≤1 秒、10,000 行新链路 ≤60 秒、2 秒进度刷新、重复投递幂等、重试/DLQ、恢复控制面、监控页及无 500/504。完成后再把正式 URL、指标和截图写回本报告。
+正式 URL、源码仓库和文档类强制提交物已齐全。当前尚不能把“考试全部通过”作为最终结论，因为最新工作树仍需提交并部署，且正式环境还需完成：20 次任务创建 P95 ≤1 秒、10,000 行新链路 ≤60 秒、2 秒进度刷新、重复投递幂等、重试/DLQ、恢复控制面、监控健康及无 500/504。完成后把正式 task_id、trace_id、指标和截图写回本报告。

@@ -35,6 +35,8 @@ export interface ImportTaskSummary {
   completed_batches: number;
   throughput: number;
   eta_seconds: number | null;
+  elapsed_seconds: number;
+  completed_duration_seconds: number | null;
   degraded: boolean;
   degraded_reason: string | null;
   recent_errors: { error_code: string; error_reason: string; count: number }[];

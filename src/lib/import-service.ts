@@ -971,8 +971,15 @@ export async function getImportTask(taskId: string): Promise<ImportTaskSummary |
   if (!task) return null;
   const completedAtMs = task.completed_at ? new Date(task.completed_at).getTime() : Date.now();
   const startedAtMs = new Date(task.started_at || task.created_at).getTime();
-  const elapsedSeconds = Math.max(1, (completedAtMs - startedAtMs) / 1000);
-  const throughput = Math.round((task.processed_rows / elapsedSeconds) * 60);
-  const etaSeconds = task.processed_rows > 0 && task.processed_rows < task.total_rows ? Math.ceil((task.total_rows - task.processed_rows) / (task.processed_rows / elapsedSeconds)) : null;
-  return { ...task, throughput, eta_seconds: etaSeconds };
+  const elapsedSeconds = Math.max(0, Math.round((completedAtMs - startedAtMs) / 1000));
+  const throughputSeconds = Math.max(1, elapsedSeconds);
+  const throughput = Math.round((task.processed_rows / throughputSeconds) * 60);
+  const etaSeconds = task.processed_rows > 0 && task.processed_rows < task.total_rows ? Math.ceil((task.total_rows - task.processed_rows) / (task.processed_rows / throughputSeconds)) : null;
+  return {
+    ...task,
+    throughput,
+    eta_seconds: etaSeconds,
+    elapsed_seconds: elapsedSeconds,
+    completed_duration_seconds: task.completed_at ? elapsedSeconds : null,
+  };
 }

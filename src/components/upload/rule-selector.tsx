@@ -4,15 +4,17 @@ import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Search, Plus, Sparkles, Check, Loader2, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useToast } from "@/components/shared/toast";
 import type { ParseRule, ParsedFile } from "@/types";
 
 interface RuleSelectorProps {
   rules: ParseRule[];
   selectedRule: ParseRule | null;
-  parsedFile: ParsedFile;
+  parsedFile: ParsedFile | null;
   onSelectRule: (rule: ParseRule) => void;
   loading?: boolean;
+  allowCreateRule?: boolean;
+  actionLabel?: string;
+  loadingLabel?: string;
 }
 
 export function RuleSelector({
@@ -21,11 +23,13 @@ export function RuleSelector({
   parsedFile,
   onSelectRule,
   loading,
+  allowCreateRule = true,
+  actionLabel = "使用此规则",
+  loadingLabel = "解析中",
 }: RuleSelectorProps) {
   const router = useRouter();
-  const { showToast } = useToast();
   const [search, setSearch] = useState("");
-  const [aiGenerating, setAiGenerating] = useState(false);
+  const aiGenerating = false;
 
   const filtered = rules.filter(
     (r) =>
@@ -34,6 +38,7 @@ export function RuleSelector({
   );
 
   const handleNewRule = useCallback(() => {
+    if (!parsedFile) return;
     // 将文件信息传给新建规则页（带时间戳，60秒内有效）
     sessionStorage.setItem(
       "newRuleFile",
@@ -68,27 +73,31 @@ export function RuleSelector({
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <button
-          onClick={handleNewRule}
-          disabled={aiGenerating}
-          className="btn-outline flex-shrink-0 gap-1.5 text-sm"
-        >
-          <Sparkles className="h-4 w-4" />
-          AI 新建规则
-        </button>
+        {allowCreateRule && parsedFile && (
+          <button
+            onClick={handleNewRule}
+            disabled={aiGenerating}
+            className="btn-outline flex-shrink-0 gap-1.5 text-sm"
+          >
+            <Sparkles className="h-4 w-4" />
+            AI 新建规则
+          </button>
+        )}
       </div>
 
       {/* 规则列表 */}
       {filtered.length === 0 ? (
         <div className="rounded-lg border border-dashed border-[#e5e6eb] py-8 text-center">
           <p className="text-sm text-[#86909c]">暂无已保存的解析规则</p>
-          <button
-            onClick={handleNewRule}
-            className="mt-2 btn-outline text-sm"
-          >
-            <Plus className="h-4 w-4" />
-            创建第一条规则
-          </button>
+          {allowCreateRule && parsedFile && (
+            <button
+              onClick={handleNewRule}
+              className="mt-2 btn-outline text-sm"
+            >
+              <Plus className="h-4 w-4" />
+              创建第一条规则
+            </button>
+          )}
         </div>
       ) : (
         <div className="max-h-64 space-y-2 overflow-y-auto">
@@ -135,7 +144,7 @@ export function RuleSelector({
                   {loading && isSelected ? (
                     <span className="flex items-center gap-1">
                       <Loader2 className="h-3 w-3 animate-spin" />
-                      解析中
+                      {loadingLabel}
                     </span>
                   ) : isSelected ? (
                     <span className="flex items-center gap-1">
@@ -145,7 +154,7 @@ export function RuleSelector({
                   ) : (
                     <span className="flex items-center gap-1">
                       <Play className="h-3 w-3" />
-                      使用此规则
+                      {actionLabel}
                     </span>
                   )}
                 </button>
