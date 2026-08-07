@@ -17,6 +17,11 @@ import { Sparkles, FileText, ArrowRight, Database, Zap } from "lucide-react";
 
 const LARGE_FILE_THRESHOLD_BYTES = 2 * 1024 * 1024;
 
+function normalizeUploadPercentage(value: number) {
+  const normalized = value <= 1 ? value * 100 : value;
+  return Math.min(100, Math.max(0, normalized));
+}
+
 type SourceBlob = { url: string; pathname: string; contentType: string; size: number; fileHash: string };
 
 export default function HomePage() {
@@ -56,7 +61,8 @@ export default function HomePage() {
         multipart: nextFile.size > 5 * 1024 * 1024,
         contentType: nextFile.type || undefined,
         onUploadProgress: ({ percentage }) => {
-          setProgress({ current: 0, total: 1, percent: 25 + Math.round(percentage * 65), status: "parsing" });
+          const uploadPercent = normalizeUploadPercentage(percentage);
+          setProgress({ current: 0, total: 1, percent: Math.min(90, 25 + Math.round(uploadPercent * 0.65)), status: "parsing" });
         },
       });
       const fileHash = Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");

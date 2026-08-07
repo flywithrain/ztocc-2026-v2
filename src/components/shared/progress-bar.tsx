@@ -12,7 +12,7 @@ export function ProgressBar({ percent, className, label }: ProgressBarProps) {
       {label && (
         <div className="mb-1 flex items-center justify-between text-xs text-[#86909c]">
           <span>{label}</span>
-          <span>{Math.round(percent)}%</span>
+          <span>{Math.round(Math.min(100, Math.max(0, percent)))}%</span>
         </div>
       )}
       <div className="progress-bar">

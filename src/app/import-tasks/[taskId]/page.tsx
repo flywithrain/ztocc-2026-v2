@@ -9,6 +9,7 @@ type Task = {
   trace_id: string;
   file_name: string;
   status: string;
+  processing_stage: string;
   total_rows: number;
   processed_rows: number;
   success_rows: number;
@@ -63,7 +64,11 @@ export default function ImportTaskPage({ params }: { params: Promise<{ taskId: s
     return () => window.clearInterval(timer);
   }, [taskId, task, loadTask, loadErrors, errorPage, errorCode, errorBatch]);
 
-  const percent = useMemo(() => task ? Math.round((task.processed_rows / Math.max(task.total_rows, 1)) * 100) : 0, [task]);
+  const hasKnownTotal = Boolean(task && task.total_rows > 0 && task.total_batches > 0);
+  const percent = useMemo(() => {
+    if (!task || task.total_rows <= 0 || task.total_batches <= 0) return 0;
+    return Math.min(100, Math.max(0, Math.round((task.processed_rows / task.total_rows) * 100)));
+  }, [task]);
   const durationLabel = formatDuration(task?.completed_duration_seconds ?? task?.elapsed_seconds ?? 0);
   const durationTitle = task?.completed_duration_seconds == null ? "已耗时" : "总耗时";
   const info = statusMap[task?.status || "pending"] || statusMap.pending;
@@ -79,8 +84,8 @@ export default function ImportTaskPage({ params }: { params: Promise<{ taskId: s
     {task.degraded && <div className="alert alert-warning mb-5 flex items-start gap-2"><AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0" /><div><strong>SKU 校验已降级</strong><p className="text-xs">{task.degraded_reason || "本次导入未经过商品主数据完整校验，数据可能需要后续复核。"}</p></div></div>}
 
     <section className="card import-progress-card mb-5 overflow-hidden border-0">
-      <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs uppercase tracking-[0.2em] text-[#8ec7c5]">Asynchronous Import / Live</p><p className="mt-2 text-4xl font-semibold tracking-tight">{percent}<span className="ml-1 text-xl text-[#8ec7c5]">%</span></p><p className="mt-1 text-sm text-[#b6cfce]">{task.processed_rows.toLocaleString()} / {task.total_rows.toLocaleString()} 行已处理</p></div><div className="text-right text-sm text-[#b6cfce]"><p>{durationTitle} <strong className="text-white">{durationLabel}</strong></p><p>当前吞吐 <strong className="text-white">{task.throughput.toLocaleString()} 行/分钟</strong></p><p>预计剩余 {task.eta_seconds == null ? "—" : formatDuration(task.eta_seconds)}</p><p>批次 {task.completed_batches} / {task.total_batches}</p></div></div>
-      <div className="mt-6 h-2 overflow-hidden rounded-full bg-white/15"><div className="h-full rounded-full bg-[#70e1cf] transition-all duration-700" style={{ width: `${percent}%` }} /></div>
+      <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs uppercase tracking-[0.2em] text-[#8ec7c5]">Asynchronous Import / Live</p><p className="mt-2 text-4xl font-semibold tracking-tight">{hasKnownTotal ? <>{percent}<span className="ml-1 text-xl text-[#8ec7c5]">%</span></> : <span className="text-2xl">后台解析中</span>}</p><p className="mt-1 text-sm text-[#b6cfce]">{hasKnownTotal ? `${task.processed_rows.toLocaleString()} / ${task.total_rows.toLocaleString()} 行已处理` : "正在读取原文件并生成处理批次"}</p></div><div className="text-right text-sm text-[#b6cfce]"><p>{durationTitle} <strong className="text-white">{durationLabel}</strong></p><p>当前阶段 <strong className="text-white">{stageLabel(task.processing_stage)}</strong></p><p>当前吞吐 <strong className="text-white">{hasKnownTotal ? `${task.throughput.toLocaleString()} 行/分钟` : "—"}</strong></p><p>预计剩余 {hasKnownTotal && task.eta_seconds != null ? formatDuration(task.eta_seconds) : "—"}</p><p>批次 {hasKnownTotal ? `${task.completed_batches} / ${task.total_batches}` : "待生成"}</p></div></div>
+      <div className="mt-6 h-2 overflow-hidden rounded-full bg-white/15"><div className={`h-full rounded-full bg-[#70e1cf] transition-all duration-700 ${hasKnownTotal ? "" : "animate-pulse"}`} style={{ width: hasKnownTotal ? `${percent}%` : "28%" }} /></div>
       <div className="mt-4 flex items-center justify-between text-xs text-[#8fb4b4]"><span>后台 Worker 自动消费，状态每 2 秒刷新</span><span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-[#70e1cf]" />trace {task.trace_id}</span></div>
     </section>
 
@@ -92,6 +97,16 @@ export default function ImportTaskPage({ params }: { params: Promise<{ taskId: s
 
     <section className="grid gap-5 lg:grid-cols-[1fr_1fr]"><div className="card"><p className="eyebrow">Trace Search</p><h2 className="text-lg font-semibold">全链路追踪</h2><p className="mt-1 text-sm text-[#86909c]">上传 → Outbox → Queue → Worker → 批量校验 → 批量写入</p><div className="mt-4 flex gap-2"><input className="input-field font-mono text-xs" readOnly value={task.trace_id} /><Link href={`/traces/${task.trace_id}`} className="btn-primary whitespace-nowrap"><Search className="h-4 w-4" />检索</Link></div></div><div className="card"><p className="eyebrow">Latest Signals</p><h2 className="text-lg font-semibold">最近错误摘要</h2>{task.recent_errors.length === 0 ? <p className="mt-4 text-sm text-[#86909c]">暂无错误信号</p> : <div className="mt-3 space-y-2">{task.recent_errors.map((error) => <div className="flex items-center justify-between rounded-lg bg-[#f7f8fa] px-3 py-2 text-sm" key={`${error.error_code}-${error.error_reason}`}><span><span className="mr-2 font-mono text-[#cf1322]">{error.error_code}</span>{error.error_reason}</span><strong>{error.count}</strong></div>)}</div>}</div></section>
   </div>;
+}
+
+function stageLabel(stage: string) {
+  return ({
+    file_uploaded: "等待解析",
+    parsing: "解析原文件",
+    parse_failed: "解析待重试",
+    waiting_batches: "等待批次处理",
+    dead_lettered: "消息处理失败",
+  } as Record<string, string>)[stage] || "批量处理中";
 }
 
 function formatDuration(seconds: number) {

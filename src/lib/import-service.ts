@@ -936,7 +936,7 @@ export async function recordQStashFailure(input: {
 export async function getImportTask(taskId: string): Promise<ImportTaskSummary | null> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(taskId)) return null;
   const rows = await sql`
-    select t.id task_id, t.trace_id, t.file_name, t.status, t.total_rows, t.total_batches,
+    select t.id task_id, t.trace_id, t.file_name, t.status, t.processing_stage, t.total_rows, t.total_batches,
       coalesce(p.processed_rows, 0)::int processed_rows,
       coalesce(p.success_rows, 0)::int success_rows,
       coalesce(p.failed_rows, 0)::int failed_rows,
@@ -961,7 +961,7 @@ export async function getImportTask(taskId: string): Promise<ImportTaskSummary |
     where t.id = ${taskId}
     limit 1
   ` as unknown as Array<{
-    task_id: string; trace_id: string; file_name: string; status: ImportTaskSummary["status"];
+    task_id: string; trace_id: string; file_name: string; status: ImportTaskSummary["status"]; processing_stage: string;
     total_rows: number; processed_rows: number; success_rows: number; failed_rows: number;
     total_batches: number; completed_batches: number; degraded: boolean; degraded_reason: string | null;
     created_at: Date | string; started_at: Date | string | null; completed_at: Date | string | null;

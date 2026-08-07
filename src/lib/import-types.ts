@@ -27,6 +27,7 @@ export interface ImportTaskSummary {
   trace_id: string;
   file_name: string;
   status: ImportTaskStatus;
+  processing_stage: string;
   total_rows: number;
   processed_rows: number;
   success_rows: number;
