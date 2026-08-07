@@ -13,10 +13,10 @@
 | 10,000 行压测 Excel | [`test-data/10000-orders-fixed.xlsx`](./test-data/10000-orders-fixed.xlsx) |
 | 正式链路压测脚本 | [`scripts/load-test.ts`](./scripts/load-test.ts) |
 | 真实 Neon 集成测试 | [`scripts/integration-test-async-import.ts`](./scripts/integration-test-async-import.ts) |
-| 压测报告（线上实测） | [`docs/LOAD_TEST_REPORT.md`](./docs/LOAD_TEST_REPORT.md) |
+| 压测报告（线上实测） | [`docs/PROJECT_DELIVERY.md`](./docs/PROJECT_DELIVERY.md) §8 |
 | 架构设计与重构假设 | [`docs/PROJECT_DELIVERY.md`](./docs/PROJECT_DELIVERY.md) |
-| 部署与环境配置 | [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md) |
-| 考试逐项验收 | [`docs/EXAM_ACCEPTANCE_REPORT.md`](./docs/EXAM_ACCEPTANCE_REPORT.md) |
+| 部署与环境配置 | [`docs/PROJECT_DELIVERY.md`](./docs/PROJECT_DELIVERY.md) §7 |
+| 考试逐项验收 | [`docs/PROJECT_DELIVERY.md`](./docs/PROJECT_DELIVERY.md) §11 |
 | 考试原题 | [`docs/V2考试要求-旧.html`](./docs/V2考试要求-旧.html) |
 | 数据库迁移 | [`drizzle/0000_free_tarantula.sql`](./drizzle/0000_free_tarantula.sql)、[`drizzle/0001_dusty_alex_wilder.sql`](./drizzle/0001_dusty_alex_wilder.sql) |
 
@@ -237,7 +237,7 @@ npm run load:test
 
 ### 6.3 当前压测结论
 
-[`docs/LOAD_TEST_REPORT.md`](./docs/LOAD_TEST_REPORT.md) 已记录 2026-08-07 真实线上端到端实测（https://ztocc-2026-v2.vercel.app/）：
+[`docs/PROJECT_DELIVERY.md`](./docs/PROJECT_DELIVERY.md) §8 已记录 2026-08-07 真实线上端到端实测（https://ztocc-2026-v2.vercel.app/）：
 
 ```text
 10,000 行全链路：30.046 秒（目标 ≤ 60 秒）✅
@@ -276,7 +276,7 @@ RUN_NEON_INTEGRATION_TEST=true npm run test:async-import:integration
 - QStash message ID、delivery attempt；
 - 真实 Neon 批量写入、行级错误、Trace、性能日志、幂等和卡死恢复。
 
-当前详细验证结果见 [`docs/EXAM_ACCEPTANCE_REPORT.md`](./docs/EXAM_ACCEPTANCE_REPORT.md)。
+当前详细验证结果见 [`docs/PROJECT_DELIVERY.md`](./docs/PROJECT_DELIVERY.md) §11。
 
 ## 8. 故障模拟与恢复验证
 
@@ -305,7 +305,7 @@ v2-import-recovery      */5 * * * *
 v2-import-blob-cleanup  0 * * * *
 ```
 
-签名、请求体、目标 URL 和安全注意事项见 [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)。
+签名、请求体、目标 URL 和安全注意事项见 [`docs/PROJECT_DELIVERY.md`](./docs/PROJECT_DELIVERY.md) §7。
 
 ## 9. 部署摘要
 
@@ -320,7 +320,7 @@ v2-import-blob-cleanup  0 * * * *
 9. 打开 `/import-monitor`，确认 QStash 已配置且无异常 DLQ。
 10. 执行正式线上压测与重试、幂等、恢复、DLQ 验收。
 
-完整步骤、变量作用域和回滚说明见 [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)。
+完整步骤、变量作用域和回滚说明见 [`docs/PROJECT_DELIVERY.md`](./docs/PROJECT_DELIVERY.md) §7。
 
 ## 10. 已知边界
 
